@@ -67,7 +67,7 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
   const INSTANT_PUSH_BUNDLE_URL = (() => {
     const branch = (typeof __BUILD_BRANCH__ !== 'undefined' && __BUILD_BRANCH__) || 'master';
     const ref = branch === 'master' || branch === 'main' || branch === 'unknown' ? 'master' : branch;
-    return `https://github.com/qegj567-cloud/SullyOS/blob/${ref}/worker/instant-push/worker.bundle.js`;
+    return `https://github.com/AlittleBadAssFaFa/SullyOS/blob/${ref}/worker/instant-push/worker.bundle.js`;
   })();
 
   useEffect(() => {

@@ -342,7 +342,7 @@ export interface InstantWorkerVersionResult {
 
 const DEFAULT_CONFIG: InstantPushConfig = {
   enabled: false,
-  workerUrl: '',
+  workerUrl: 'https://sully-instant-push.alittlebadassfafa.deno.net',
 };
 
 // 旧版本 (v1 之前) 把 vapidPublicKey 平铺在 InstantPushConfig 里。读取时
