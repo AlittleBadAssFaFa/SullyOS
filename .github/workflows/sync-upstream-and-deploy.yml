@@ -85,11 +85,19 @@ jobs:
         if: steps.sync.outputs.changed == 'true'
         run: git push origin HEAD:master
 
+      - name: Trigger Cloudflare Pages deployment
+        if: steps.sync.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
+        env:
+          CF_PAGES_DEPLOY_HOOK: ${{ secrets.CF_PAGES_DEPLOY_HOOK }}
+        run: curl --fail --silent --show-error --request POST "$CF_PAGES_DEPLOY_HOOK"
+
       - name: Summary
         shell: bash
         run: |
           if [[ "${{ steps.sync.outputs.changed }}" == "true" ]]; then
             echo "Upstream sync completed. Cloudflare Pages will deploy the pushed commit." >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "No upstream updates. Cloudflare Pages rebuild was requested manually." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "No upstream updates." >> "$GITHUB_STEP_SUMMARY"
           fi
