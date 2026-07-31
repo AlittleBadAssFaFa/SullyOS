@@ -1,26 +1,20 @@
-name: Sync upstream and deploy
+name: Sync upstream
 
 on:
   schedule:
     # 04:30 Asia/Shanghai
     - cron: "30 20 * * *"
   workflow_dispatch:
-    inputs:
-      force_deploy:
-        description: Deploy even when upstream has no new commits
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: write
 
 concurrency:
-  group: sullyos-upstream-deploy
+  group: sullyos-upstream-sync
   cancel-in-progress: false
 
 jobs:
-  sync-build-deploy:
+  sync-upstream:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -50,41 +44,30 @@ jobs:
             changed=true
           fi
 
-          force=false
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.force_deploy }}" == "true" ]]; then
-            force=true
-          fi
-
-          should_deploy=false
-          if [[ "$changed" == "true" || "$force" == "true" ]]; then
-            should_deploy=true
-          fi
-
           {
             echo "changed=$changed"
-            echo "should_deploy=$should_deploy"
             echo "commit=$after"
           } >> "$GITHUB_OUTPUT"
 
       - name: Set up pnpm
-        if: steps.sync.outputs.should_deploy == 'true'
+        if: steps.sync.outputs.changed == 'true'
         uses: pnpm/action-setup@v4
         with:
           version: 9.15.4
 
       - name: Set up Node.js
-        if: steps.sync.outputs.should_deploy == 'true'
+        if: steps.sync.outputs.changed == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: pnpm
 
       - name: Install dependencies
-        if: steps.sync.outputs.should_deploy == 'true'
+        if: steps.sync.outputs.changed == 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Run focused regression tests
-        if: steps.sync.outputs.should_deploy == 'true'
+        if: steps.sync.outputs.changed == 'true'
         run: >-
           pnpm exec vitest run
           utils/proxyWorker.test.ts
@@ -95,80 +78,8 @@ jobs:
           utils/memoryPalace/backupVectorChunked.test.ts
 
       - name: Build production site
-        if: steps.sync.outputs.should_deploy == 'true'
+        if: steps.sync.outputs.changed == 'true'
         run: pnpm build
-
-      - name: Prepare SSH
-        if: steps.sync.outputs.should_deploy == 'true'
-        shell: bash
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.SULLY_SSH_PRIVATE_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.SULLY_SSH_KNOWN_HOSTS }}
-        run: |
-          set -euo pipefail
-          install -m 700 -d "$HOME/.ssh"
-          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_sully_deploy"
-          chmod 600 "$HOME/.ssh/id_sully_deploy"
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          chmod 600 "$HOME/.ssh/known_hosts"
-
-      - name: Upload production build
-        if: steps.sync.outputs.should_deploy == 'true'
-        shell: bash
-        env:
-          SSH_HOST: ${{ secrets.SULLY_SSH_HOST }}
-          SSH_PORT: ${{ secrets.SULLY_SSH_PORT }}
-          SSH_USER: ${{ secrets.SULLY_SSH_USER }}
-        run: |
-          set -euo pipefail
-          archive="/tmp/sullyos-${GITHUB_RUN_ID}.tgz"
-          tar -czf "$archive" -C dist .
-          scp -i "$HOME/.ssh/id_sully_deploy" -P "$SSH_PORT" \
-            "$archive" "$SSH_USER@$SSH_HOST:/tmp/sullyos-${GITHUB_RUN_ID}.tgz"
-
-      - name: Publish with rollback
-        if: steps.sync.outputs.should_deploy == 'true'
-        shell: bash
-        env:
-          SSH_HOST: ${{ secrets.SULLY_SSH_HOST }}
-          SSH_PORT: ${{ secrets.SULLY_SSH_PORT }}
-          SSH_USER: ${{ secrets.SULLY_SSH_USER }}
-        run: |
-          set -euo pipefail
-          ssh -i "$HOME/.ssh/id_sully_deploy" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
-            "GITHUB_RUN_ID='$GITHUB_RUN_ID' bash -s" <<'REMOTE'
-          set -euo pipefail
-          parent=/var/www/sites
-          live="$parent/sullyos"
-          stamp="$(date +%Y%m%d-%H%M%S)"
-          next="$parent/sullyos-next-$stamp"
-          backup="$parent/sullyos-backup-$stamp"
-          archive="/tmp/sullyos-${GITHUB_RUN_ID}.tgz"
-
-          [[ "$(realpath "$parent")" == "/var/www/sites" ]]
-          [[ "$(realpath "$live")" == "/var/www/sites/sullyos" ]]
-
-          mkdir -p "$next"
-          tar -xzf "$archive" -C "$next"
-          test -s "$next/index.html"
-
-          # Keep old hashed chunks so already-open browser tabs do not break.
-          if [[ -d "$live/assets" ]]; then
-            mkdir -p "$next/assets"
-            cp -an "$live/assets"/. "$next/assets"/
-          fi
-
-          mv "$live" "$backup"
-          mv "$next" "$live"
-
-          if ! nginx -t || ! curl -fsS http://127.0.0.1:9012/ >/dev/null; then
-            mv "$live" "$next.failed"
-            mv "$backup" "$live"
-            exit 1
-          fi
-
-          rm -f "$archive"
-          REMOTE
 
       - name: Push merged upstream commit
         if: steps.sync.outputs.changed == 'true'
@@ -177,8 +88,8 @@ jobs:
       - name: Summary
         shell: bash
         run: |
-          if [[ "${{ steps.sync.outputs.should_deploy }}" == "true" ]]; then
-            echo "Upstream sync and deployment completed." >> "$GITHUB_STEP_SUMMARY"
+          if [[ "${{ steps.sync.outputs.changed }}" == "true" ]]; then
+            echo "Upstream sync completed. Cloudflare Pages will deploy the pushed commit." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "No upstream updates. Deployment skipped." >> "$GITHUB_STEP_SUMMARY"
+            echo "No upstream updates." >> "$GITHUB_STEP_SUMMARY"
           fi
