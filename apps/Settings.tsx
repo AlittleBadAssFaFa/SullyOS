@@ -27,6 +27,7 @@ import { isPushVapidReady } from '../utils/pushVapid';
 import ApiCallLogModal from '../components/settings/ApiCallLogModal';
 import { DB } from '../utils/db';
 import { getBackupReminderState, setBackupReminderIntervalDays, daysSinceLastBackup, BACKUP_REMINDER_MIN_DAYS, BACKUP_REMINDER_MAX_DAYS } from '../utils/backupReminder';
+import { PERSONAL_FORK_REPOSITORY } from '../config/personalFork';
 
 // hot_news（orz.ai）可选热榜平台。key 必须与 API 的 ?platform= 完全一致。
 const HOTNEWS_PLATFORM_OPTIONS: { key: string; label: string }[] = [
@@ -65,7 +66,7 @@ const DiagRow: React.FC<{ label: string; value: string; bad?: boolean }> = ({ la
 
 // 用户版 MCP 教程（自包含，写给用户和他们的 AI 助手看的）。静态部署的站点
 // 看不到仓库内文档，所以帮助弹窗只能跳 GitHub 的 blob 页。
-const MCP_USER_GUIDE_URL = 'https://github.com/AlittleBadAssFaFa/SullyOS/blob/master/docs/mcp-user-guide.md';
+const MCP_USER_GUIDE_URL = `https://github.com/${PERSONAL_FORK_REPOSITORY}/blob/master/docs/mcp-user-guide.md`;
 
 /**
  * 设置大板块的折叠外壳：默认收起，标题行常显、点击开合；

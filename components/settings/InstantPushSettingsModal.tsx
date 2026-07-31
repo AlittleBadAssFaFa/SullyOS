@@ -21,6 +21,7 @@ import {
 import { INSTANT_WORKER_VERSION } from '../../utils/instantWorkerVersion';
 import { FAQ_TARGET_SECTION_KEY, CHANGELOG_2026_05_27 } from '../UpdateNotificationEvent';
 import { InstantPushConfig, AppID } from '../../types';
+import { PERSONAL_FORK_REPOSITORY } from '../../config/personalFork';
 
 interface InstantPushSettingsModalProps {
   open: boolean;
@@ -67,7 +68,7 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
   const INSTANT_PUSH_BUNDLE_URL = (() => {
     const branch = (typeof __BUILD_BRANCH__ !== 'undefined' && __BUILD_BRANCH__) || 'master';
     const ref = branch === 'master' || branch === 'main' || branch === 'unknown' ? 'master' : branch;
-    return `https://github.com/AlittleBadAssFaFa/SullyOS/blob/${ref}/worker/instant-push/worker.bundle.js`;
+    return `https://github.com/${PERSONAL_FORK_REPOSITORY}/blob/${ref}/worker/instant-push/worker.bundle.js`;
   })();
 
   useEffect(() => {

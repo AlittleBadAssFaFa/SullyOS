@@ -11,6 +11,7 @@ import {
 } from './pushSubscribeShared';
 import { ReiClient } from '@rei-standard/amsg-client';
 import { INSTANT_WORKER_VERSION } from './instantWorkerVersion';
+import { PERSONAL_INSTANT_PUSH_WORKER } from '../config/personalFork';
 
 const log = makeDebugLogger('instant-push', 'InstantPush');
 
@@ -342,7 +343,7 @@ export interface InstantWorkerVersionResult {
 
 const DEFAULT_CONFIG: InstantPushConfig = {
   enabled: false,
-  workerUrl: 'https://sully-instant-push.alittlebadassfafa.deno.net',
+  workerUrl: PERSONAL_INSTANT_PUSH_WORKER,
 };
 
 // 旧版本 (v1 之前) 把 vapidPublicKey 平铺在 InstantPushConfig 里。读取时

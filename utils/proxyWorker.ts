@@ -1,3 +1,5 @@
+import { PERSONAL_PROXY_WORKER } from '../config/personalFork';
+
 /**
  * 主代理 Worker 地址 —— 中心配置（单一可信源）
  *
@@ -17,7 +19,7 @@
  * 独立的 worker 地址输入框，走各自的持久化，不受这里影响。
  */
 
-export const DEFAULT_PROXY_WORKER = 'https://sully-backend.badfafa.workers.dev';
+export const DEFAULT_PROXY_WORKER = PERSONAL_PROXY_WORKER;
 
 const LS_KEY = 'sully_proxy_worker_url_v1';
 
