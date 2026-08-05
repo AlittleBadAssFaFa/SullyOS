@@ -180,6 +180,11 @@ describe('v2 真实链路：分片 → 组装 → importFullData', () => {
             contextRangeMode: 'manual',
             contextLimit: 1200,
             contextUserStartMessageId: 345,
+            memoryPalaceWaterline: {
+                preset: 'custom',
+                hotZoneSize: 80,
+                bufferThreshold: 30,
+            },
         };
         const zip = new FakeZip();
         const manifest = await writeV2Backup(zip, { characters: [char] } as any, {});
@@ -193,6 +198,11 @@ describe('v2 真实链路：分片 → 组装 → importFullData', () => {
             contextRangeMode: 'manual',
             contextLimit: 1200,
             contextUserStartMessageId: 345,
+            memoryPalaceWaterline: {
+                preset: 'custom',
+                hotZoneSize: 80,
+                bufferThreshold: 30,
+            },
         });
     });
 
@@ -378,7 +388,7 @@ describe('v2 真实链路：向量二进制旁路', () => {
         // 备份只含 vA（新值）+ vC，不含 vB
         const payload = encodeVectorsForBackup([
             { memoryId: 'vA', charId: 'c1', vector: toU8([1, 2, 3, 4]) },
-            { memoryId: 'vC', charId: 'c2', vector: toU8([5, 6, 7, 8]) },
+            { memoryId: 'vC', charId: 'story-theater:backup-entry', vector: toU8([5, 6, 7, 8]) },
         ]);
         const zip = new FakeZip();
         const manifest = await writeV2Backup(zip, { memoryNodes: [{ id: 'n1' }] }, { vectors: payload });
@@ -392,6 +402,7 @@ describe('v2 真实链路：向量二进制旁路', () => {
         // 逐值一致，且 vA 是新值不是旧值
         expect(vecValues(byId.get('vA'))).toEqual([1, 2, 3, 4]);
         expect(vecValues(byId.get('vC'))).toEqual([5, 6, 7, 8]);
+        expect(byId.get('vC').charId).toBe('story-theater:backup-entry');
         // 落库形态是 Uint8Array（紧凑存储）
         expect(byId.get('vA').vector).toBeInstanceOf(Uint8Array);
     });

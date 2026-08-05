@@ -120,6 +120,9 @@ export interface OSTheme {
   scheduleCardAppearance?: ScheduleCardAppearance;
   desktopDecorations?: DesktopDecoration[];
   customFont?: string;
+  /** 顶部时间栏布局：安全显示（安全区下方）/ 紧凑显示（嵌入安全区）/ 完全隐藏。 */
+  statusBarMode?: 'standard' | 'compact' | 'hidden';
+  /** @deprecated 旧版两档开关，仅用于兼容已有存档；新设置写入 statusBarMode。 */
   hideStatusBar?: boolean;
   // Chat UI customization (global)
   chatAvatarShape?: 'circle' | 'rounded' | 'square';
@@ -285,7 +288,6 @@ export interface InstantPushConfig {
 
 export type InstantOversizeTransport = 'multipart' | 'd1';
 
-export type ActiveMsg2DbDriver = 'pg' | 'neon';
 export type ActiveMsg2Mode = 'fixed' | 'auto' | 'prompted';
 export type ActiveMsg2Recurrence = 'none' | 'daily' | 'weekly';
 
@@ -297,32 +299,79 @@ export interface ActiveMsg2ApiConfig {
 
 export interface ActiveMsg2GlobalConfig {
   userId: string;
-  driver: ActiveMsg2DbDriver;
-  databaseUrl: string;
-  initSecret?: string;
-  tenantId?: string;
-  tenantToken?: string;
-  cronToken?: string;
-  cronWebhookUrl?: string;
-  masterKeyFingerprint?: string;
+  /** 单用户 Cloudflare Worker 地址，例如 https://amsg.your-worker.dev */
+  workerUrl: string;
+  /** 与 worker 约定的共享密钥；配了就每次请求带 X-Client-Token，缺/错 worker 返回 401 */
+  serverToken?: string;
+  /** 上次「连接」（在 worker 端建表）成功的时间 */
   initializedAt?: number;
   updatedAt?: number;
 }
 
-export interface ActiveMsg2CharacterConfig {
-  enabled: boolean;
+export type ActiveMsg2ExpirePolicy = 'expire' | 'force';
+export type ActiveMsg2TaskSource = 'user' | 'character';
+/** scheduled=待触发/循环中；cancelled 仅短暂存在（取消即从清单移除）。到点后的
+ *  一次性任务不改 status——「已发送/已作废」由消息历史现场推导，避免 React 外写角色数据。 */
+export type ActiveMsg2TaskStatus = 'scheduled' | 'cancelled';
+
+export interface ActiveMsg2TaskRecord {
+  taskUuid: string;
+  /** 客户端排程前自造的 uuid v4，与 push metadata 的 amsgClientTaskId 同源——送达归属匹配键。 */
+  clientTaskId: string;
   mode: ActiveMsg2Mode;
+  /** ISO / datetime-local 字符串，首次触发时间。 */
   firstSendTime: string;
+  /**
+   * 远端算出来的下一次触发时刻（对账时同步回来）。循环任务按角色所在时区的墙钟推进，
+   * 本地拿固定周期自己乘出来的那个一跨夏令时就会偏一小时——显示以这份为准。
+   */
+  nextSendAt?: string;
   recurrenceType: ActiveMsg2Recurrence;
+  /** fixed 模式的固定内容。 */
   userMessage?: string;
   promptHint?: string;
+  /** 防穿帮策略；fixed 任务恒为 'force'（见 amsg2Tasks.resolveExpirePolicy）。 */
+  expirePolicy: ActiveMsg2ExpirePolicy;
+  /** 排程时最后一条真实用户消息的时间戳（作废判定锚点；当时无消息为 0）。 */
+  anchorLastUserMsgAt?: number;
+  source: ActiveMsg2TaskSource;
+  status: ActiveMsg2TaskStatus;
+  createdAt: number;
+  lastError?: string;
+}
+
+export interface ActiveMsg2CharacterConfig {
+  enabled: boolean;
+  /** 多任务清单（用户在面板建的和角色用工具建的并存），见 utils/amsg2Tasks.ts。 */
+  tasks?: ActiveMsg2TaskRecord[];
+  /** ↓ 角色级共享设置（所有任务共用）。 */
   maxTokens?: number;
-  taskUuid?: string;
-  remoteStatus?: 'idle' | 'scheduled' | 'sent' | 'error';
   useSecondaryApi?: boolean;
   secondaryApi?: ActiveMsg2ApiConfig;
   lastSyncedAt?: number;
   lastError?: string;
+}
+
+/** 任务「没了」的回执台账（amsg-local IDB kv，按角色一条数组）。 */
+export interface Amsg2ExpiredNoticeRecord {
+  /**
+   * 防穿帮闸作废：一次性任务 = taskUuid，循环任务 = `${taskUuid}:${occurrenceMs}`；
+   * 用户手动取消 = `${taskUuid}:cancelled`（同一条任务可能两件事都发生过，各占一条）。
+   */
+  id: string;
+  charId: string;
+  occurrenceMs: number;
+  mode: ActiveMsg2Mode;
+  promptHint?: string;
+  recurrenceType: ActiveMsg2Recurrence;
+  /**
+   * 这条回执是怎么来的：闸自动作废（缺省）还是用户在面板里手动取消。
+   * 两者给角色的交代不一样——作废可以续期补上，手动取消是用户不要了。
+   */
+  kind?: 'expired' | 'user-cancelled';
+  /** 已注入过排程现状块（角色已知情），不再重复注入。 */
+  notifiedAt?: number;
+  createdAt: number;
 }
 
 export interface ActiveMsg2InboxMessage {
@@ -336,9 +385,23 @@ export interface ActiveMsg2InboxMessage {
   messageType?: string;
   messageSubtype?: string;
   taskId?: string | null;
+  /**
+   * 任务身份，由库盖在 push 顶层带下来（不是排程方写进 metadata 的）。
+   * 两条排程路径——用户在面板排的、角色在 fire 里给自己排的——走的是同一份，
+   * 所以防穿帮闸和任务认领都读这里，不读 metadata 里各自抄的那份。
+   */
+  taskUuid?: string | null;
+  recurrenceType?: string | null;
+  /** 本次触发的名义时刻（epoch 毫秒）。 */
+  occurrenceMs?: number | null;
   metadata?: Record<string, any>;
   sentAt?: number;
   receivedAt: number;
+  /**
+   * 已经尝试处理过几次（见 activeMsgRuntime 的 MAX_INBOX_PROCESS_ATTEMPTS）。
+   * 处理失败时消息会写回收件箱等重试，这个计数决定什么时候放弃重试、退回存原稿保底。
+   */
+  processAttempts?: number;
 }
 
 // Phase 2 Round 1 — Instant Push agentic loop session state, written client-side
@@ -1883,8 +1946,14 @@ export interface DateState {
     dialogueQueue: DialogueItem[];
     dialogueBatch: DialogueItem[];
     currentText: string;
-    bgImage: string;
-    currentSprite: string;
+    /** @deprecated 旧版恢复快照会复制背景图，可能是超大 base64；新版恢复优先读角色上的 dateBackground。 */
+    bgImage?: string;
+    /** @deprecated 旧版恢复快照会复制立绘图，可能是超大 base64；新版恢复优先读 currentSpriteKey。 */
+    currentSprite?: string;
+    /** 当前立绘对应的情绪 key，只存引用信息，避免把 base64 立绘重复塞进 savedDateState。 */
+    currentSpriteKey?: string;
+    /** 恢复时优先按当时的皮肤集找 currentSpriteKey，皮肤不存在再回退当前皮肤/默认立绘。 */
+    activeSkinSetId?: string;
     isNovelMode: boolean;
     timestamp: number;
     peekStatus: string;
@@ -1958,6 +2027,8 @@ export interface StoryTheaterEntry {
     presetId?: string;
     /** 会话内快速预设只覆盖本剧场，不修改预设库。 */
     presetOverride?: StoryTheaterPresetDocument;
+    /** 仅供拒绝 assistant prefill、要求最后一条消息必须为 user 的接口使用；默认关闭以保留原生预设效果。 */
+    forceUserLastMessage?: boolean;
     createdAt: number;
     updatedAt: number;
 }
@@ -2262,6 +2333,16 @@ export interface CharMusicProfile {
     updatedAt: number;
 }
 
+export type MemoryPalaceWaterlinePreset = 'online' | 'balanced' | 'offline' | 'custom';
+
+export interface MemoryPalaceWaterlineConfig {
+  preset: MemoryPalaceWaterlinePreset;
+  /** 自定义档位才读取；预设档位由统一映射决定。 */
+  hotZoneSize?: number;
+  /** 自定义档位才读取；预设档位由统一映射决定。 */
+  bufferThreshold?: number;
+}
+
 export interface CharacterProfile {
   id: string;
   name: string;
@@ -2296,6 +2377,11 @@ export interface CharacterProfile {
    * - manual：用户拉杆决定最多读取最近 contextLimit 条完整原文。
    */
   contextRangeMode?: 'adaptive' | 'manual';
+  /**
+   * 用户主动点「一键存进记忆宫殿」后，让原文范围继续跟随记忆水位线。
+   * 与全自动归档开关独立；未使用该按钮的旧角色保持 undefined，不改变既有行为。
+   */
+  contextFollowsMemoryPalaceHwm?: boolean;
   /** 上下文范围结构版本；用于把旧版「5000 条 + 自动水位隐藏」一次性迁移到自适应模式。 */
   contextRangePolicyVersion?: number;
   /**
@@ -2412,6 +2498,9 @@ export interface CharacterProfile {
 
   // Chat & Date voice TTS settings
   chatVoiceEnabled?: boolean;
+  // 收到语音是否自动播放。默认关（不填 = 不自动播）：语音条照常出现，点一下才响。
+  // 只管 AI 自动发来的语音；用户主动点「转换语音」/ 点空语音条生成的，仍然生成完就播。
+  chatVoiceAutoPlay?: boolean;
   chatVoiceLang?: string;
   dateVoiceEnabled?: boolean;
   dateVoiceLang?: string;
@@ -2454,6 +2543,12 @@ export interface CharacterProfile {
    * 已处理的聊天。默认 false（opt-in）——首次启用建议让用户做一次 force 追平历史。
    */
   autoArchiveEnabled?: boolean;
+  /**
+   * 角色独立的记忆水位节奏。整个角色消息时间线共用这一份配置，不区分私聊、
+   * 见面、通话或剧情来源。缺省代表 online，即保持历史行为 200/100。
+   * 作为 CharacterProfile 一部分随 IndexedDB 与完整备份持久化。
+   */
+  memoryPalaceWaterline?: MemoryPalaceWaterlineConfig;
   embeddingConfig?: {
     baseUrl: string;
     apiKey: string;
@@ -3422,6 +3517,7 @@ export interface FullBackupData {
     browserConfig?: { braveKey?: string; useRealSearch?: boolean };
     bm25Mode?: string;
     lastActiveCharId?: string;
+    storyTheaterAppearance?: string;
     eventNotifFlags?: Record<string, string>;  // sullyos_* 事件通知标记
     hotNewsSnapshots?: HotNewsSnapshot[];
     dreamCollection?: Record<string, { firstAt: number; count: number }>;  // 梦境盲盒收藏册（os_dream_collection，账号级 localStorage）

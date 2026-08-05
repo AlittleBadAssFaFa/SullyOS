@@ -601,6 +601,21 @@ export const DB = {
     });
   },
 
+  /**
+   * 某个角色的聊天条数。走 charId 索引的 count()，**一条消息都不会被读出来**，
+   * IndexedDB 只回一个数字。使用统计的规模档位用它，别拿 getMessagesByCharId
+   * 去 length ——那会把整段聊天记录读进内存。
+   */
+  countMessagesByCharId: async (charId: string): Promise<number> => {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_MESSAGES, 'readonly');
+      const request = transaction.objectStore(STORE_MESSAGES).index('charId').count(IDBKeyRange.only(charId));
+      request.onsuccess = () => resolve(request.result || 0);
+      request.onerror = () => reject(request.error);
+    });
+  },
+
   // Performance: Load only the most recent N messages for a character
   getRecentMessagesByCharId: async (charId: string, limit: number, includeProcessed: boolean = false): Promise<Message[]> => {
     const db = await openDB();
@@ -618,6 +633,30 @@ export const DB = {
           if (cursor && collected.length < limit) {
               const m = cursor.value as Message;
               if (!m.groupId && (includeProcessed || m.id > hwm)) collected.push(m);
+              cursor.continue();
+          } else {
+              resolve(collected.reverse());
+          }
+      };
+      cursorReq.onerror = () => reject(cursorReq.error);
+    });
+  },
+
+  // DateApp 等按来源展示的轻量历史读取：用 charId 索引倒序扫，只收集目标 source 的最近 N 条。
+  // 这样不会为了渲染见面阅读模式，把该角色全量聊天（含图片/base64消息）一次性 getAll 进内存。
+  getRecentMessagesByCharIdAndSource: async (charId: string, source: string, limit: number): Promise<Message[]> => {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_MESSAGES, 'readonly');
+      const store = transaction.objectStore(STORE_MESSAGES);
+      const index = store.index('charId');
+      const collected: Message[] = [];
+      const cursorReq = index.openCursor(IDBKeyRange.only(charId), 'prev');
+      cursorReq.onsuccess = () => {
+          const cursor = cursorReq.result;
+          if (cursor && collected.length < limit) {
+              const m = cursor.value as Message;
+              if (!m.groupId && m.metadata?.source === source) collected.push(m);
               cursor.continue();
           } else {
               resolve(collected.reverse());
@@ -1960,6 +1999,11 @@ export const DB = {
       const db = await openDB();
       const transaction = db.transaction(STORE_STORY_THEATERS, 'readwrite');
       transaction.objectStore(STORE_STORY_THEATERS).delete(id);
+      return new Promise((resolve, reject) => {
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => reject(transaction.error);
+          transaction.onabort = () => reject(transaction.error || new Error('deleteStoryTheater aborted'));
+      });
   },
 
   getStoryTheaterPresets: async (): Promise<StoryTheaterPreset[]> => {
@@ -2453,6 +2497,63 @@ export const DB = {
           tx.oncomplete = () => resolve();
           tx.onerror = () => reject(tx.error || new Error('clearApiCallLog transaction failed'));
           tx.onabort = () => reject(tx.error || new Error('clearApiCallLog transaction aborted'));
+      });
+  },
+
+  // --- 下一次 LLM 请求完整抓包（同 store 独立单例，永远只保留一份）---
+  getApiRequestCapture: async (): Promise<any | null> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_API_CALL_LOG)) return null;
+      return new Promise((resolve) => {
+          const tx = db.transaction(STORE_API_CALL_LOG, 'readonly');
+          const req = tx.objectStore(STORE_API_CALL_LOG).get('one-shot-capture');
+          req.onsuccess = () => resolve(req.result?.capture ?? null);
+          req.onerror = () => resolve(null);
+      });
+  },
+
+  saveApiRequestCapture: async (capture: any): Promise<void> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_API_CALL_LOG)) return;
+      return new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_API_CALL_LOG, 'readwrite');
+          tx.objectStore(STORE_API_CALL_LOG).put({ id: 'one-shot-capture', capture });
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error || new Error('saveApiRequestCapture transaction failed'));
+          tx.onabort = () => reject(tx.error || new Error('saveApiRequestCapture transaction aborted'));
+      });
+  },
+
+  patchApiRequestCapture: async (captureId: string, patch: Record<string, unknown>): Promise<boolean> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_API_CALL_LOG)) return false;
+      return new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_API_CALL_LOG, 'readwrite');
+          const store = tx.objectStore(STORE_API_CALL_LOG);
+          const req = store.get('one-shot-capture');
+          let updated = false;
+          req.onsuccess = () => {
+              const current = req.result?.capture;
+              if (!current || current.id !== captureId) return;
+              store.put({ id: 'one-shot-capture', capture: { ...current, ...patch } });
+              updated = true;
+          };
+          req.onerror = () => reject(req.error || new Error('patchApiRequestCapture read failed'));
+          tx.oncomplete = () => resolve(updated);
+          tx.onerror = () => reject(tx.error || new Error('patchApiRequestCapture transaction failed'));
+          tx.onabort = () => reject(tx.error || new Error('patchApiRequestCapture transaction aborted'));
+      });
+  },
+
+  clearApiRequestCapture: async (): Promise<void> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_API_CALL_LOG)) return;
+      return new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_API_CALL_LOG, 'readwrite');
+          tx.objectStore(STORE_API_CALL_LOG).delete('one-shot-capture');
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error || new Error('clearApiRequestCapture transaction failed'));
+          tx.onabort = () => reject(tx.error || new Error('clearApiRequestCapture transaction aborted'));
       });
   },
 
