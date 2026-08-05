@@ -4706,10 +4706,17 @@ var isFreshChatPresence = (value, charId, nowMs) => Boolean(
   value && value.v === 1 && value.charId === charId && value.activeAt <= nowMs + 1e4 && nowMs - value.activeAt <= CHAT_PRESENCE_TTL_MS
 );
 
+// config/personalFork.ts
+var PERSONAL_PROXY_WORKER = "https://sully-backend.badfafa.workers.dev";
+
 // utils/proxyWorker.ts
-var DEFAULT_PROXY_WORKER = "https://sullymeow.ccwu.cc";
+var DEFAULT_PROXY_WORKER = PERSONAL_PROXY_WORKER;
 var LS_KEY = "sully_proxy_worker_url_v1";
-var STALE_HOSTS = [/sully-n\.qegj567\.workers\.dev/i, /sullymeow\.ccwu213\.cc/i];
+var STALE_HOSTS = [
+  /sully-n\.qegj567\.workers\.dev/i,
+  /sullymeow\.ccwu213\.cc/i,
+  /sf\.badfafa\.top/i
+];
 var normalize = (url) => url.trim().replace(/\/+$/, "");
 var runtimeOverrideUrl = null;
 var setProxyWorkerUrlOverride = (url) => {
