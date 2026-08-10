@@ -1024,9 +1024,8 @@ const buildToolConfigEntry = (
  * 退订后要等浏览器清内部 removed 标记（SUBSCRIBE_SETTLE_MS），否则紧接着的
  * subscribe() 又拿到死哨兵。
  *
- * 判定口径与 instantPushClient.getOrCreateInstantSubscription /
- * proactivePushConfig.getOrCreateSubscription 的内联实现一致；那两处在各自文件里，
- * 将来合并时以这份抽出来的函数为准。export 供单测 mock pushManager 钉行为。
+ * 判定口径与 instantPushClient.getOrCreateInstantSubscription 一致；两条推送链路
+ * 共用这份函数，避免浏览器兼容处理发生偏差。export 供单测 mock pushManager 钉行为。
  */
 export const dropStaleSubscription = async (
   sub: PushSubscription | null,
@@ -1243,7 +1242,7 @@ export const ActiveMsgClient = {
   async getPushStatus(): Promise<ActiveMsg2PushStatus> {
     const config = await ensureGlobalReady();
     const workerConfigured = Boolean(config.workerUrl.trim());
-    // 能力检测与 instant push / proactive push 共用 describePushCapabilityGap：
+    // 能力检测与 instant push 共用 describePushCapabilityGap：
     // 它会说清缺的是三件套里的哪一件，「不支持」这三个字用户拿着没法action。
     const capabilityGap = describePushCapabilityGap();
     if (capabilityGap) {
@@ -1401,7 +1400,7 @@ export const ActiveMsgClient = {
    *
    * 副作用：SW 会短暂下线（1 秒上下），这期间来的推送是真丢。但会点这个按钮的前提
    * 就是「已经收不到了」，不存在把原本收得到的弄丢。主动消息 2.0 的排程存在 worker
-   * 的 D1 里、跟 SW 无关，不用像 proactive-push 那样重新推排程回去。
+   * 的 D1 里、跟 SW 无关，不需要重新写入排程。
    */
   async deepResetPushSubscription(): Promise<void> {
     const config = await requirePushReady();

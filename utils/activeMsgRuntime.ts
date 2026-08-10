@@ -790,7 +790,7 @@ const processInboxMessageWithPostProcessing = async (
 /**
  * 这条 inbox message 是不是它所在 session 的**最后一条 chunk**.
  * messageIndex == totalMessages → 最后一条 ✓
- * 都缺失 (老 worker / proactive push 单 push) → 0 === 0 也认 last
+ * 都缺失（旧 worker 的单条 push）→ 0 === 0 也认 last
  */
 function isLastChunk(message: ActiveMsg2InboxMessage): boolean {
   const mi = Number(message.metadata?.messageIndex ?? 0);

@@ -400,7 +400,7 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
               </p>
               <p className={vapidReady ? 'text-emerald-600' : 'text-rose-600'}>
                 {vapidReady
-                  ? '与 Proactive Push 共用同一份。改了之后两边的订阅都会续上。'
+                  ? '与主动消息 2.0 共用同一份。改了之后两边的订阅都会续上。'
                   : '需要先生成 VAPID 密钥对，Worker env 也要同步填进去。'}
               </p>
             </div>

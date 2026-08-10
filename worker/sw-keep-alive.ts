@@ -93,9 +93,6 @@ let pingTimer: number | null = null;
 let manualKeepAliveCount = 0;
 let manualKeepAliveStartedAt = 0;
 
-const proactiveSchedules = new Map<string, { charId: string; intervalMs: number }>();
-const proactiveTimers = new Map<string, number>();
-
 const sw = self as unknown as ServiceWorkerGlobalScope;
 
 function summarizeAmsgPayload(payload: any): Record<string, any> {
@@ -140,12 +137,8 @@ installReiSW(sw, {
   },
 });
 
-function hasActiveProactiveSchedules() {
-  return proactiveTimers.size > 0;
-}
-
 function shouldKeepAlive() {
-  return manualKeepAliveCount > 0 || hasActiveProactiveSchedules();
+  return manualKeepAliveCount > 0;
 }
 
 function stopPingLoop() {
@@ -201,47 +194,6 @@ async function notifyClients(data: Record<string, any>) {
   for (const client of clients) {
     client.postMessage(data);
   }
-}
-
-function fireProactiveTrigger(charId: string) {
-  void notifyClients({ type: 'proactive-trigger', charId });
-}
-
-function stopProactive(charId: string) {
-  const timer = proactiveTimers.get(charId);
-  if (timer) {
-    clearInterval(timer);
-    proactiveTimers.delete(charId);
-  }
-  proactiveSchedules.delete(charId);
-}
-
-function upsertProactive(config: { charId: string; intervalMs: number }) {
-  const prev = proactiveSchedules.get(config.charId);
-  const unchanged = prev && prev.intervalMs === config.intervalMs;
-  if (unchanged && proactiveTimers.has(config.charId)) return;
-
-  stopProactive(config.charId);
-  proactiveSchedules.set(config.charId, config);
-
-  const timer = setInterval(() => fireProactiveTrigger(config.charId), config.intervalMs) as unknown as number;
-  proactiveTimers.set(config.charId, timer);
-}
-
-function syncProactive(configs: Array<{ charId: string; intervalMs: number }>) {
-  const nextIds = new Set((configs || []).map((config) => config.charId));
-
-  for (const charId of Array.from(proactiveSchedules.keys())) {
-    if (!nextIds.has(charId)) stopProactive(charId);
-  }
-
-  for (const config of configs || []) {
-    if (config && config.charId && config.intervalMs > 0) {
-      upsertProactive(config);
-    }
-  }
-
-  refreshKeepAlive();
 }
 
 function readPushPayload(event: PushEvent): any | null {
@@ -755,22 +707,6 @@ sw.addEventListener('message', (event: ExtendableMessageEvent) => {
       break;
     case 'keepalive-stop':
       stopKeepAlive();
-      break;
-    case 'proactive-start':
-      if (event.data.config) {
-        syncProactive([...proactiveSchedules.values(), event.data.config]);
-      }
-      break;
-    case 'proactive-stop':
-      if (event.data.charId) {
-        stopProactive(event.data.charId);
-        refreshKeepAlive();
-      } else {
-        syncProactive([]);
-      }
-      break;
-    case 'proactive-sync':
-      syncProactive(event.data.configs || []);
       break;
   }
 });

@@ -16,12 +16,6 @@ if (import.meta.env.VITE_AMSG_NATIVE_PUSH === 'true' && Capacitor.isNativePlatfo
 
 // Register the keep-alive Service Worker early so it's ready before any AI calls
 KeepAlive.init().then(() => {
-  // Active Message 1.0 was retired in favor of AMSG 2.0. Clear any schedule
-  // left by an older build, including the copy held by the service worker.
-  for (const key of ['proactive_schedules', 'proactive_last_fire_map', 'proactive_schedule', 'proactive_last_fire']) {
-    localStorage.removeItem(key);
-  }
-  navigator.serviceWorker?.controller?.postMessage({ type: 'proactive-sync', configs: [] });
   // Resume 「彼方」 autonomous-login schedules
   VRScheduler.resume();
   void ActiveMsgRuntime.init();

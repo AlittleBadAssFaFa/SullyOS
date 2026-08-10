@@ -5,7 +5,6 @@ import { DB } from '../utils/db';
 import { ChatPrompts } from '../utils/chatPrompts';
 import { safeFetchJson, safeResponseJson } from '../utils/safeApi';
 import { KeepAlive } from '../utils/keepAlive';
-import { ProactiveChat } from '../utils/proactiveChat';
 import { ContextBuilder } from '../utils/context';
 import { ChatParser } from '../utils/chatParser';
 // 思考链 / HTML / MCD / memoryPalace 注入已下沉到 chatRequestPayload；这里不再直接调用
@@ -2106,18 +2105,6 @@ export const useChatAI = ({
 
 
 
-    const startProactiveChat = (intervalMinutes: number) => {
-        if (!char) return;
-        ProactiveChat.start(char.id, intervalMinutes);
-    };
-
-    const stopProactiveChat = () => {
-        if (!char) return;
-        ProactiveChat.stop(char.id);
-    };
-
-    const isProactiveActive = char ? ProactiveChat.isActiveFor(char.id) : false;
-
     return {
         isTyping,
         streamingBubbles,
@@ -2136,9 +2123,6 @@ export const useChatAI = ({
         tokenBreakdown,
         setLastTokenUsage, // Allow manual reset if needed
         triggerAI,
-        startProactiveChat,
-        stopProactiveChat,
-        isProactiveActive,
         lastSystemPrompt,
         evolvedNarrative,
     };

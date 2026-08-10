@@ -1,8 +1,8 @@
 /**
  * Shared VAPID credentials store.
  *
- * Both Instant Push (utils/instantPushClient.ts) and Proactive Push
- * (utils/proactivePushConfig.ts) read VAPID from here so they don't fight
+ * Both Instant Push (utils/instantPushClient.ts) and Active Messaging 2.0
+ * read VAPID from here so they don't fight
  * over the single per-origin pushManager.subscription — same VAPID → no
  * unsubscribe-and-rebuild churn.
  *

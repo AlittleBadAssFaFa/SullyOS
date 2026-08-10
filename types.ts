@@ -280,8 +280,8 @@ export interface APIConfig {
 export interface InstantPushConfig {
   enabled: boolean;
   workerUrl: string;        // https://your-instant.workers.dev
-  // VAPID 公私钥已迁移到 utils/pushVapid.ts (push_vapid_v1)，与 Proactive Push
-  // 共享同一份，避免两边互相 unsubscribe 抢同一个 pushManager 订阅。
+  // VAPID 公私钥已迁移到 utils/pushVapid.ts (push_vapid_v1)，由 Instant Push
+  // 与主动消息 2.0 共用，避免重复订阅同一个 pushManager。
   clientToken?: string;     // 对应 Worker 的 AMSG_CLIENT_TOKEN
   // 发送文本后是否自动触发 AI 回复 (worker 端跑 + push 回写). 仅控制"自动触发"这件事,
   // 不改变 instant push 本身的开关含义. 关闭时 instant 模式也保留手动 ⚡, 跟本地模式一致.
@@ -1153,7 +1153,7 @@ export interface VRNovelAnnotation {
 
 /** 角色在虚拟世界里的个人状态（挂在 CharacterProfile.vrState）。 */
 export interface VRWorldCharState {
-    /** 是否启用该角色的自主登入（独立于主动发消息 proactiveConfig） */
+    /** 是否启用该角色的自主登入 */
     enabled: boolean;
     /** 自主登入间隔（分钟，30 对齐；默认 120 = 2h） */
     intervalMinutes: number;
@@ -2555,18 +2555,6 @@ export interface CharacterProfile {
   // Cross-session guidebook insights: what char has discovered about user across games
   guidebookInsights?: string[];
 
-  // 主动消息配置
-  proactiveConfig?: {
-    enabled: boolean;
-    intervalMinutes: number; // 30, 60, 120, 240, etc.
-    useSecondaryApi?: boolean;
-    secondaryApi?: {
-      baseUrl: string;
-      apiKey: string;
-      model: string;
-    };
-  };
-
   // 情绪Buff系统
   activeMsg2Config?: ActiveMsg2CharacterConfig;
   activeBuffs?: CharacterBuff[];
@@ -2690,7 +2678,7 @@ export interface CharacterProfile {
 
   /**
    * 虚拟世界「彼方」的个人状态：是否自主登入、登入间隔、各本小说的独立书签等。
-   * 独立于 proactiveConfig（主动发消息），互不挤占触发。
+   * 与其他定时任务相互独立，不挤占触发。
    */
   vrState?: VRWorldCharState;
 }

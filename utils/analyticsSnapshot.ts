@@ -397,10 +397,6 @@ export function collectFeatureFlags(src: FeatureSources): Record<string, string>
         // ── 推送 ──
         // Instant Push「配了」= 填了 worker 地址，「开」还要 VAPID 也齐（跟
         // isInstantConfigReady 同口径），否则会把「填了地址但没生成密钥」误报成开着。
-        //
-        // 没报「主动消息 Push 加速」：那一层已经全局下线（proactivePushConfig.ts 的
-        // FORCE_DISABLED，设置面板也藏了），loadPushConfig() 恒返回 enabled=false。
-        // 报出来只会是一片「关」，看着像没人用，其实是被下掉了——这种数据比没有更坏。
         InstantPush: triState(
             Boolean(instant.workerUrl?.startsWith('https://')),
             Boolean(instant.enabled && instant.workerUrl?.startsWith('https://') && isPushVapidReady()),

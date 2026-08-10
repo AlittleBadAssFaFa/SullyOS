@@ -564,7 +564,7 @@ export function buildCloudflareDashboardUrl(workerUrl: string | undefined): stri
 
 // ── Web Push subscription helpers ─────────────────────────────────────────
 //
-// 与 proactivePushConfig 共用一份 race 处理 / encoding helpers, 实现在
+// 与主动消息 2.0 共用一份 race 处理 / encoding helpers, 实现在
 // pushSubscribeShared.ts.
 
 export async function getOrCreateInstantSubscription(
