@@ -1,4 +1,3 @@
-import { PERSONAL_PROACTIVE_PUSH_WORKER } from '../config/personalFork';
 
 /**
  * Config + wire-up for the optional Cloudflare Worker that accelerates
@@ -23,7 +22,7 @@ import { PERSONAL_PROACTIVE_PUSH_WORKER } from '../config/personalFork';
 //   用户在 Settings → Instant Push 里生成；Proactive 和 Instant 共用同一份
 //   VAPID，避免两边互相 unsubscribe 抢同一个 pushManager 订阅。
 // ═══════════════════════════════════════════════════════════════════
-const WORKER_URL = PERSONAL_PROACTIVE_PUSH_WORKER;
+const WORKER_URL = '';
 // The accelerator is disabled below. Keep secrets out of the public fork.
 const CLIENT_TOKEN = '';
 // ═══════════════════════════════════════════════════════════════════
