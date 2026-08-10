@@ -4,10 +4,8 @@ import App from './App';
 import { installTranslateCrashGuard } from './utils/translateCrashGuard';
 import { ActiveMsgRuntime } from './utils/activeMsgRuntime';
 import { KeepAlive } from './utils/keepAlive';
-import { ProactiveChat } from './utils/proactiveChat';
 import { VRScheduler } from './utils/vrWorld/scheduler';
 import { installIOSStandaloneWorkaround } from './utils/iosStandalone';
-import { installWakeListener } from './utils/proactivePushConfig';
 import { initAnalytics } from './utils/analytics';
 import { Capacitor } from '@capacitor/core';
 
@@ -18,13 +16,15 @@ if (import.meta.env.VITE_AMSG_NATIVE_PUSH === 'true' && Capacitor.isNativePlatfo
 
 // Register the keep-alive Service Worker early so it's ready before any AI calls
 KeepAlive.init().then(() => {
-  // Resume any active proactive schedule after SW is ready
-  ProactiveChat.resume();
+  // Active Message 1.0 was retired in favor of AMSG 2.0. Clear any schedule
+  // left by an older build, including the copy held by the service worker.
+  for (const key of ['proactive_schedules', 'proactive_last_fire_map', 'proactive_schedule', 'proactive_last_fire']) {
+    localStorage.removeItem(key);
+  }
+  navigator.serviceWorker?.controller?.postMessage({ type: 'proactive-sync', configs: [] });
   // Resume 「彼方」 autonomous-login schedules
   VRScheduler.resume();
   void ActiveMsgRuntime.init();
-  // Record every wake the SW reports so the diagnostic panel can show "last received".
-  installWakeListener();
 });
 
 installIOSStandaloneWorkaround();
