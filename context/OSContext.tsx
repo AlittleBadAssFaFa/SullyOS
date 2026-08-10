@@ -5,6 +5,7 @@ import { DB } from '../utils/db';
 import { modelRejectsSamplingParams, stripSamplingParams, isSamplingParamError } from '../utils/samplingParamCompat';
 import { extractImagesInPlace, deepCloneForExport } from '../utils/backupExport';
 import { isBlobRef, getBlobForRef, migrateDataUrlToRef, migrateAppearancePresetBlobRefs, resolveBlobRefsDeep, BLOBREF_PREFIX, deleteBlobRefIfUnreferenced } from '../utils/blobRef';
+import { initPwaIcon, clearPwaIcon } from '../utils/appIcon';
 import { LEGACY_DEFAULT_WALLPAPER, isLegacyDefaultWallpaper, shouldPreserveLegacyDefaultWallpaper } from '../utils/wallpaperCompat';
 import { migrateSharkpanAssets } from '../utils/sharkpanAssetMigration';
 import { SULLY_DEFAULT_AVATAR_URL, shouldMigrateSullyAvatar } from '../utils/sullyAvatar';
@@ -23,6 +24,7 @@ import { safeFetchJson } from '../utils/safeApi';
 import { captureApiRequestOnce, getApiCallAmbientContext, recordApiCall, setApiCallAmbientContext, updateApiRequestCaptureUsage } from '../utils/apiCallLog';
 import { isGlobalStreamEnabled, upgradeChatBodyToStream, assembleUpgradedResponse } from '../utils/streamUpgrade';
 import { rewriteStaleWorkerUrl } from '../utils/proxyWorker';
+import { buildFetchFailureDetail, classifyFetchFailure, describeReachabilityProbe, parseTargetUrl, probeOriginReachability, shouldProbeReachability } from '../utils/networkFailureDiagnosis';
 import { INSTALLED_APPS, HIDDEN_APP_NAMES } from '../constants';
 import { isAnalyticsRequestUrl, trackEvent, trackDataScaleOnce, trackCurrentAppearanceOnce, trackCurrentCharSettingsOnce, trackCurrentFeaturesOnce } from '../utils/analytics';
 import { collectAppearance, collectCharSettings, collectDataScale, collectFeatureFlagsAsync } from '../utils/analyticsSnapshot';
@@ -50,7 +52,7 @@ import {
 } from '../utils/memoryPalace/autoArchive';
 import { ActiveMsgClient } from '../utils/activeMsgClient';
 import { resolveCharTimeZone } from '../utils/timezone';
-import { ActiveMsgStore } from '../utils/activeMsgStore';
+import { ActiveMsgStore, exportAmsg2GlobalConfig } from '../utils/activeMsgStore';
 import { charMayHaveCloudState, purgeCharCloudState } from '../utils/amsg2CharCleanup';
 import { markAmsgStateDirty, markAmsgStateDirtyForAll, resumePendingAmsgStateSync, syncAmsgToolConfigAndPrompts } from '../utils/amsgStateSync';
 import { loadMusicPlaybackSnapshot } from './MusicContext';
@@ -590,6 +592,12 @@ const resolveLockWallpaperStoredValue = async (w: string | undefined): Promise<s
 const defaultApiConfig: APIConfig = {
   baseUrl: '',
   apiKey: '',
+  visionApi: {
+    enabled: false,
+    baseUrl: '',
+    apiKey: '',
+    model: '',
+  },
   minimaxApiKey: '',
   minimaxGroupId: '',
   minimaxRegion: 'domestic',
@@ -1203,14 +1211,41 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   recordApiCall({ requestId: (config as any)?.__sullyApiCallId, url: urlStr, body: (sendArgs[1] as any)?.body, ok: false, meta: (config as any)?.__sullyMeta || ambientMetaAtStart, durationMs: Date.now() - fetchStartedAt });
               }
               if (!isAnalyticsRequestUrl(urlStr)) {
+                  // 光秃秃一句 "Failed to fetch" + 一个 URL 排查不了任何东西（社区里这条卡过好几个人）。
+                  // 这里把浏览器肯在 JS 侧交出来的旁证一次性补齐：方法、耗时、在线状态、是否跨域、
+                  // Resource Timing 里那条记录，再给一句初判；随后异步做一次 no-cors 连通性复检，
+                  // 结论回填到同一条日志上——「网络不通」和「网络通但响应被 CORS 拦」要走的排查路
+                  // 完全相反，不分开的话用户只能瞎试。详见 utils/networkFailureDiagnosis.ts。
+                  const logId = `log-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                  const method = (typeof Request !== 'undefined' && resource instanceof Request)
+                      ? resource.method
+                      : ((config as RequestInit | undefined)?.method || 'GET');
+                  const baseDetail = buildFetchFailureDetail({
+                      url: urlStr,
+                      method,
+                      durationMs: Date.now() - fetchStartedAt,
+                      error: err,
+                  });
                   setSystemLogs(prev => [{
-                      id: `log-${Date.now()}`,
+                      id: logId,
                       timestamp: Date.now(),
                       type: 'network',
                       source: 'Network',
                       message: err.message || 'Fetch Failed',
-                      detail: `URL: ${urlStr}`
+                      detail: baseDetail,
                   }, ...prev.slice(0, 49)]);
+
+                  // 复检走 originalFetch，否则它自己失败会再写一条日志滚雪球。
+                  if (shouldProbeReachability(classifyFetchFailure({ url: urlStr, error: err }))) {
+                      void (async () => {
+                          const verdict = await probeOriginReachability(urlStr, originalFetch);
+                          const line = describeReachabilityProbe(verdict, parseTargetUrl(urlStr).host);
+                          if (!line) return;
+                          setSystemLogs(prev => prev.map(log => (
+                              log.id === logId ? { ...log, detail: `${log.detail || ''}\n${line}` } : log
+                          )));
+                      })();
+                  }
               }
               throw err;
           }
@@ -1385,6 +1420,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                     }
                 }
                 setCustomIcons(loadedIcons);
+                initPwaIcon(loadedIcons); // 启动时恢复自定义 PWA 图标（见 utils/appIcon.ts）
                 // Strip deprecated slots that may have been imported via beautification packs.
                 if (loadedTheme.launcherWidgets) {
                     for (const slot of DEPRECATED_WIDGET_SLOTS) {
@@ -1583,8 +1619,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
         setCustomThemes(dbThemes);
         if (dbUser) setUserProfile(dbUser);
 
-        // amsg2 脏标记兜底补传：上次会话打了脏、但没等到上传就被杀进程的角色（10s 去抖
-        // 窗口内关 App），按 localStorage 底账用刚从 DB 读回的数据重建快照传一次。
+        // amsg2 脏标记兜底补传：上次会话打了脏、但请求还没落地（在飞或躺在退避重排里）
+        // 就被杀进程的角色，按 localStorage 底账用刚从 DB 读回的数据重建快照传一次。
         // realtimeConfig 的 state 此刻可能还没就位，直接读它的持久化来源。
         try {
           const savedRealtime = localStorage.getItem('os_realtime_config');
@@ -2169,6 +2205,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   // 不存在；保持 undefined 即可，与"用户当时根本没在 chat 界面"的语义一致
                   htmlMode: { enabled: !!(char as any).htmlModeEnabled, customPrompt: (char as any).htmlModeCustomPrompt },
                   thinkingChain: { enabled: !!(char as any).showThinkingChain, customPrompt: (char as any).thinkingChainCustomPrompt },
+                  visionApiConfig: currentApiConfig.visionApi,
               });
               const systemPrompt = payload.systemPrompt;
               const apiMessages = payload.cleanedApiMessages;
@@ -3433,6 +3470,10 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           for (const appId of iconAppIds) {
               await DB.deleteAsset(`icon_${appId}`);
           }
+          // 自定义的主屏图标也在 customIcons 里（_pwa_），但它额外往 DOM 注入过一条
+          // apple-touch-icon / manifest，删数据不会把注入撤掉——不撤的话页面上那条还挂着
+          // 已经不存在的图标，直到下次刷新。
+          clearPwaIcon();
 
           const allAssets = await DB.getAllAssets();
           for (const asset of allAssets) {
@@ -3805,6 +3846,13 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               // 是普通消息、随 messages store 一起导出，这里只补带走这个纯外观偏好。
               gotchiAccentHue: (mode === 'text_only' || mode === 'full') ? (() => { try { const s = localStorage.getItem('tama_accent_hue'); return s !== null ? s : undefined; } catch { return undefined; } })() : undefined,
           };
+
+          // 主动消息 2.0 的全局配置（Worker 地址 / 密钥 / 即时对话开关）。它存在独立的
+          // ActiveMsg 库里，不在上面那份 store 清单内，所以单独取一次；异步，故在字面量外。
+          // 纯配置无媒体，跟着 text_only / full 走。
+          if (mode === 'text_only' || mode === 'full') {
+              backupData.amsg2GlobalConfig = await exportAmsg2GlobalConfig();
+          }
 
           // 桌面皮肤偏好（电子宠物/手游风的界面配色 + 看板 banner）——异步（看板图令牌需解析为
           // data URL 才能跨设备），所以在对象字面量外单独 await。text_only 只带配色偏好、跳过看板大图。

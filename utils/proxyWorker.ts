@@ -11,6 +11,7 @@ import { PERSONAL_PROXY_WORKER } from '../config/personalFork';
  *   - Notion 集成                             → /notion/*
  *   - 飞书多维表格集成                        → /feishu/*
  *   - 麦当劳 / 瑞幸 点单 MCP                   → /mcp/mcd /mcp/luckin
+ *   - Cloudflare API 中转（一键部署后端用）    → /cf-api
  *
  * 本 Fork 默认指向自己的 Cloudflare Worker。仍可在
  * 「设置 → 网络代理 (Worker)」里临时覆盖。

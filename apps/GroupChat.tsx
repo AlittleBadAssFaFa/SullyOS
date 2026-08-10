@@ -33,6 +33,7 @@ import WhiteboxSoundEditor from '../components/chat/WhiteboxSoundEditor';
 import HtmlCard from '../components/chat/HtmlCard';
 import { WhiteboxSound, parseWhiteboxSound, upsertWhiteboxSound, stripWhiteboxSoundDirective, resolveActiveSound, playWhiteboxSound, unlockWhiteboxAudio } from '../utils/whiteboxSound';
 import { buildHtmlPrompt } from '../utils/htmlPrompt';
+import { materializeVisionDescriptions } from '../utils/visionApi';
 import {
     buildGroupTopicContext,
     buildGroupTopicPrompt,
@@ -391,8 +392,8 @@ const GroupChat: React.FC = () => {
 
     // 群里的动静会进每个成员私聊 prompt 的【群聊背景】块，话题盒成盒时还直接往成员私聊
     // 历史里写卡片 —— 两者都是主动消息 2.0 云端快照（fire_pack）的素材。群里有事就给成员
-    // 逐个打脏，不然角色到点还活在上一次私聊那会儿的群里。去抖会把一轮里的多次调用合并成
-    // 一次上传，没开主动消息的成员被 markAmsgStateDirty 内部的门筛掉。
+    // 逐个打脏，不然角色到点还活在上一次私聊那会儿的群里。同一轮里的多次调用会在微任务内
+    // 合并成一次上传，没开主动消息的成员被 markAmsgStateDirty 内部的门筛掉。
     const markGroupMembersDirty = useCallback((memberIds: string[]) => {
         for (const memberId of memberIds) {
             const member = charactersRef.current.find(c => c.id === memberId);
@@ -1224,7 +1225,16 @@ ${memberTimeline || '(暂无互动记录)'}
 
             // 3. Group History + 导演任务指令（模板原文照搬进 utils/groupChat/prompts.ts）
             const liveHistoryMsgs = currentMsgs.filter(m => m.id > (activeGroup.archivedThroughMessageId || 0));
-            const history = buildGroupHistoryBlock(liveHistoryMsgs.slice(-contextLimit), characters, emojis, userProfile.name);
+            const historyWindow = liveHistoryMsgs.slice(-contextLimit);
+            const preparedHistory = await materializeVisionDescriptions(historyWindow, apiConfig.visionApi);
+            const history = buildGroupHistoryBlock(
+                preparedHistory,
+                characters,
+                emojis,
+                userProfile.name,
+                3,
+                { useVisionDescriptions: apiConfig.visionApi?.enabled === true },
+            );
             const emojiContextStr = buildEmojiContextStr(emojis, categories, activeGroup.members);
             // HTML 模块模式：群开关开启时追加提示词。导演模式输出的是 JSON 数组，
             // 额外强调 [html] 块写在角色 content 字符串内部且 HTML 属性用单引号，避免破坏外层 JSON
@@ -1329,7 +1339,19 @@ ${memberTimeline || '(暂无互动记录)'}
                     const { header, sharedScene } = buildGroupSystemHeader(roundMsgs, groupMembers);
                     const memberBlock = await buildMemberBlock(member, roundMsgs, sharedScene);
                     const liveRoundMsgs = roundMsgs.filter(m => m.id > (activeGroup.archivedThroughMessageId || 0));
-                    const history = buildGroupHistoryBlock(liveRoundMsgs.slice(-contextLimit), characters, emojis, userProfile.name);
+                    const historyWindow = liveRoundMsgs.slice(-contextLimit);
+                    const preparedHistory = await materializeVisionDescriptions(historyWindow, apiConfig.visionApi);
+                    const preparedById = new Map(preparedHistory.map(message => [message.id, message]));
+                    // 轮询模式后续成员继续复用本轮刚写回的描述，不能每位成员各识图一次。
+                    roundMsgs = roundMsgs.map(message => preparedById.get(message.id) || message);
+                    const history = buildGroupHistoryBlock(
+                        preparedHistory,
+                        characters,
+                        emojis,
+                        userProfile.name,
+                        3,
+                        { useVisionDescriptions: apiConfig.visionApi?.enabled === true },
+                    );
                     const emojiContextStr = buildEmojiContextStr(emojis, categories, activeGroup.members);
                     const htmlPromptExt = activeGroup.htmlModeEnabled
                         ? `\n\n${buildHtmlPrompt(activeGroup.htmlModeCustomPrompt)}`

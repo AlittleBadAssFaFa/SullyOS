@@ -230,9 +230,19 @@ export type MinimaxRegion = 'domestic' | 'overseas';
 // 全局二选一：切换后所有语音场景（聊天语音条 / 约会 / 电话）统一用同一家。
 export type TtsProvider = 'minimax' | 'fishaudio';
 
+export interface VisionApiConfig {
+  /** 开启后，聊天图片先由独立视觉模型转成文字，再交给主对话模型。 */
+  enabled: boolean;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+}
+
 export interface APIConfig {
   baseUrl: string;
   apiKey: string;
+  // 可选识图中转：给不支持 image_url 的主模型补视觉能力。
+  visionApi?: VisionApiConfig;
   minimaxApiKey?: string;
   minimaxGroupId?: string;
   // 'domestic' → https://api.minimaxi.com (国内站)
@@ -303,8 +313,31 @@ export interface ActiveMsg2GlobalConfig {
   workerUrl: string;
   /** 与 worker 约定的共享密钥；配了就每次请求带 X-Client-Token，缺/错 worker 返回 401 */
   serverToken?: string;
+  /**
+   * 一键部署时生成的 AMSG_MASTER_KEY（worker 侧用它加密任务内容）。
+   * 存在这里只为「重装时沿用同一把」——它一换，之前加密进 D1 的任务就全解不开了，
+   * 而 worker 里的值读不回来。手动部署的用户这里是空的，属正常。
+   */
+  masterKey?: string;
   /** 上次「连接」（在 worker 端建表）成功的时间 */
   initializedAt?: number;
+  /**
+   * 即时对话：聊天的每一轮都交给云端跑（POST /instant-chat），回复走推送回来。
+   * 只在设置页那一处开关（开关本身还有连接 / 通知权限 / worker 能力三道门），
+   * 关掉就是现在的本地直连生成。
+   */
+  instantChatEnabled?: boolean;
+  /**
+   * 上一次探到的「那台 Worker 真的跑得动即时对话吗」（见 ActiveMsgClient.probeInstantChatSupport）。
+   *
+   * false 时即时对话整个让位给本地生成，**用户开着也不走** —— 跑不动的 Worker 上这条路
+   * 是发一条挂一条，让位比让他对着「已开启」干等强。探测每次都会刷新它，用户更新完
+   * Worker 下一次探测自然翻回 true，不用手动去重开开关。
+   *
+   * undefined = 还没探过（刚装、没进过设置页），按放行处理：这一档说明我们不知道，
+   * 而不是知道它不行；握手时会补探一次，之后就有准数了。
+   */
+  instantChatSupported?: boolean;
   updatedAt?: number;
 }
 
@@ -342,10 +375,22 @@ export interface ActiveMsg2TaskRecord {
 
 export interface ActiveMsg2CharacterConfig {
   enabled: boolean;
+  /**
+   * 即时对话按角色单独关。undefined = 跟随全局（全局即时对话开着就默认开）；
+   * false = 这个角色的聊天回到本地前台生成。与 enabled（排程开关）互相独立：
+   * 可以只排程不即时，也可以只即时不排程。
+   */
+  instantChatEnabled?: boolean;
   /** 多任务清单（用户在面板建的和角色用工具建的并存），见 utils/amsg2Tasks.ts。 */
   tasks?: ActiveMsg2TaskRecord[];
   /** ↓ 角色级共享设置（所有任务共用）。 */
   maxTokens?: number;
+  /**
+   * 「我没回的时候，TA 最多连续主动发几条」。0 = 不限；没设 = 默认值
+   * （amsgFirePack.DEFAULT_MAX_UNANSWERED_SENDS）。管的是角色自己排的后续
+   * （含 fire 里的自排链），用户在面板里亲手排的任务不受它管；用户一回复就重新计数。
+   */
+  maxUnansweredSends?: number;
   useSecondaryApi?: boolean;
   secondaryApi?: ActiveMsg2ApiConfig;
   lastSyncedAt?: number;
@@ -3361,6 +3406,12 @@ export interface FullBackupData {
     apiConfig?: APIConfig;
     instantPushConfig?: InstantPushConfig;
     pushVapid?: { vapidPublicKey: string; vapidPrivateKey: string; vapidEmail?: string; updatedAt?: number; };
+    /**
+     * 主动消息 2.0 的全局配置：Worker 地址、共享密钥、一键部署生成的 AMSG_MASTER_KEY、
+     * 即时对话总开关。存在独立的 `ActiveMsg` 库里，所以单独占一格（见 activeMsgStore
+     * 的 exportAmsg2GlobalConfig）。角色身上那份 activeMsg2Config 跟着 characters 走。
+     */
+    amsg2GlobalConfig?: ActiveMsg2GlobalConfig;
     apiPresets?: ApiPreset[];
     availableModels?: string[];
     realtimeConfig?: RealtimeConfig;  // 实时感知配置（天气/新闻/Notion）
@@ -3643,6 +3694,7 @@ export interface XhsMcpConfig {
     enabled: boolean;
     serverUrl: string;  // MCP: "http://localhost:18060/mcp" | Skills: "http://localhost:18061/api" | Lite Worker: "https://xhs-lite.<acct>.workers.dev/api"
     cookie?: string;    // Lite 模式：登录后的小红书完整 cookie（含 a1 / web_session）。仅 lite Worker 用。
+    platform?: 'xhs' | 'rednote'; // Lite 自动识别出的国内小红书 / 全球 RedNote 后端
     rnoteApiKey?: string; // Lite 模式可选：用户自己的 Rnote Key，仅用于读取真实评论。
     loggedInUserId?: string;   // 登录用户的 user_id，连接测试成功后自动获取
     loggedInNickname?: string; // 登录用户的昵称

@@ -35,6 +35,7 @@ import { getBackupReminderState, setBackupReminderIntervalDays, daysSinceLastBac
 import { PERSONAL_FORK_REPOSITORY } from '../config/personalFork';
 import { bucketRetryCount, isAnalyticsConfigured, isAnalyticsEnabled, setAnalyticsEnabled, trackEvent } from '../utils/analytics';
 import { normalizeApiBaseUrl, normalizeApiCredential, normalizeApiModel } from '../utils/apiConfigNormalize';
+import { describeImageWithVisionApi, VISION_API_TEST_IMAGE_DATA_URL, visionApiConfigFromPreset } from '../utils/visionApi';
 
 // hot_news（news.orz.ai）可选热榜平台。key 必须与 API 的 ?platform= 完全一致。
 const HOTNEWS_PLATFORM_OPTIONS: { key: string; label: string }[] = [
@@ -63,6 +64,36 @@ const HOTNEWS_PLATFORM_OPTIONS: { key: string; label: string }[] = [
 // 「主动消息 Push 加速」面板入口开关。底层逻辑（心跳、订阅、诊断）全部保留，
 // 这里设为 false 只是把设置页里的入口隐藏掉，想恢复改回 true 即可。
 const SHOW_PROACTIVE_PUSH_ACCEL_UI = false;
+const VISION_MODEL_LIST_STORAGE_KEY = 'os_vision_available_models';
+
+const readStoredVisionModels = (): string[] => {
+    try {
+        return normalizeModelIds(JSON.parse(localStorage.getItem(VISION_MODEL_LIST_STORAGE_KEY) || '[]'));
+    } catch {
+        return [];
+    }
+};
+
+const buildModelPickerView = (models: unknown[], filter: string) => {
+    const q = filter.trim().toLowerCase();
+    const safeModels = normalizeModelIds(models);
+    const filtered = q ? safeModels.filter(model => model.toLowerCase().includes(q)) : safeModels;
+    let commonPrefix = '';
+    if (filtered.length >= 2) {
+        let prefix = filtered[0];
+        for (let index = 1; index < filtered.length; index += 1) {
+            const candidate = filtered[index];
+            let cursor = 0;
+            while (cursor < prefix.length && cursor < candidate.length && prefix[cursor] === candidate[cursor]) cursor += 1;
+            prefix = prefix.slice(0, cursor);
+            if (!prefix) break;
+        }
+        const cut = Math.max(prefix.lastIndexOf('/'), prefix.lastIndexOf('-'));
+        if (cut > 3) prefix = prefix.slice(0, cut + 1);
+        if (prefix.length >= 4) commonPrefix = prefix;
+    }
+    return { filtered, commonPrefix };
+};
 
 const DiagRow: React.FC<{ label: string; value: string; bad?: boolean }> = ({ label, value, bad }) => (
     <div className="flex items-start justify-between gap-3">
@@ -419,6 +450,15 @@ const Settings: React.FC = () => {
   const [localTemperature, setLocalTemperature] = useState<number>(
     typeof apiConfig.temperature === 'number' ? apiConfig.temperature : 0.85
   );
+  const [localVisionEnabled, setLocalVisionEnabled] = useState(apiConfig.visionApi?.enabled === true);
+  const [localVisionUrl, setLocalVisionUrl] = useState(apiConfig.visionApi?.baseUrl || '');
+  const [localVisionKey, setLocalVisionKey] = useState(apiConfig.visionApi?.apiKey || '');
+  const [localVisionModel, setLocalVisionModel] = useState(apiConfig.visionApi?.model || '');
+  const [availableVisionModels, setAvailableVisionModels] = useState<string[]>(readStoredVisionModels);
+  const [selectedVisionPresetId, setSelectedVisionPresetId] = useState<string | null>(null);
+  const [visionStatusMsg, setVisionStatusMsg] = useState('');
+  const [testingVisionApi, setTestingVisionApi] = useState(false);
+  const [visionTestResult, setVisionTestResult] = useState<string | null>(null);
   const [localMiniMaxKey, setLocalMiniMaxKey] = useState(apiConfig.minimaxApiKey || '');
   const [localMiniMaxGroupId, setLocalMiniMaxGroupId] = useState(apiConfig.minimaxGroupId || '');
   const [localMiniMaxRegion, setLocalMiniMaxRegion] = useState<'domestic' | 'overseas'>(
@@ -440,6 +480,7 @@ const Settings: React.FC = () => {
   // 高级设置（流式/温度）默认折叠 — 大多数用户不需要碰
   const [showApiAdvanced, setShowApiAdvanced] = useState(false);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [isLoadingVisionModels, setIsLoadingVisionModels] = useState(false);
   const [newPresetName, setNewPresetName] = useState('');
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
   const [selectedPresetName, setSelectedPresetName] = useState('');
@@ -449,6 +490,8 @@ const Settings: React.FC = () => {
   // UI States
   const [showModelModal, setShowModelModal] = useState(false);
   const [modelFilter, setModelFilter] = useState('');
+  const [showVisionModelModal, setShowVisionModelModal] = useState(false);
+  const [visionModelFilter, setVisionModelFilter] = useState('');
   const [showExportModal, setShowExportModal] = useState(false); // Used for completion now
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showPresetModal, setShowPresetModal] = useState(false);
@@ -513,13 +556,14 @@ const Settings: React.FC = () => {
   const XHS_RISK_TEXT = '⚠️ 风险：本功能基于网页爬虫技术调用小红书，账号有被风控的概率。建议①用小号；②尽量别让角色主动发帖；③发出的笔记可能被屏蔽。';
   const XHS_COOKIE_GUIDE = [
     '【获取小红书 cookie 教程】',
-    '1. 用电脑浏览器(Chrome/Edge)登录 www.xiaohongshu.com',
+    '1. 用电脑浏览器(Chrome/Edge)登录实际分配给你的站点：www.xiaohongshu.com 或 www.rednote.com',
     '2. 按 F12 打开开发者工具，切到「Network/网络」标签',
-    '3. 刷新页面，点列表最上面那条「explore」(document 类型，发给 www.xiaohongshu.com 的主请求)',
+    '3. 刷新页面，点列表最上面那条「explore」(document 类型，发给当前网站的主请求)',
     '4. 右侧切到「Headers/标头」，往下滚到「Request Headers/请求标头」',
     '5. 找到 cookie: 开头那一行(很长一串)',
     '6. 复制它后面整段的值：可把 Request Headers 右边的「Raw」开关打开看纯文本更好选，或在值上右键 Copy value，或选中后 Ctrl+C',
     '7. 确认这串里有 a1= 和 web_session= 两个字段(最关键)，粘到「小红书 Lite」的 cookie 框',
+    'Lite 会自动判断这串 Cookie 属于国内小红书还是全球 RedNote；不用自己补 gid、bRequestId 等会随站点变化的字段。',
     '注意：别用 Console 的 document.cookie，拿不到 web_session(httpOnly)。cookie 数天~数周会过期，失效重复制即可。',
   ].join('\n');
   const _xhsCfgUrl = realtimeConfig.xhsMcpConfig?.serverUrl || '';
@@ -532,6 +576,7 @@ const Settings: React.FC = () => {
   const [rtXhsNickname, setRtXhsNickname] = useState(realtimeConfig.xhsMcpConfig?.loggedInNickname || '');
   const [rtXhsUserId, setRtXhsUserId] = useState(realtimeConfig.xhsMcpConfig?.loggedInUserId || '');
   const [rtXhsCookie, setRtXhsCookie] = useState(realtimeConfig.xhsMcpConfig?.cookie || '');
+  const [rtXhsPlatform, setRtXhsPlatform] = useState<'xhs' | 'rednote' | undefined>(realtimeConfig.xhsMcpConfig?.platform);
   const [rtXhsGuideOpen, setRtXhsGuideOpen] = useState(false);
   const [rtTestStatus, setRtTestStatus] = useState('');
 
@@ -567,27 +612,14 @@ const Settings: React.FC = () => {
   const [vapidReadyTick, setVapidReadyTick] = useState(0); // 关闭 VAPID 弹窗后刷新顶层徽标
 
   // 模型选择 Modal 的过滤 + 公共前缀（memo 掉，避免每次 Settings 重渲染都重算）
-  const modelPickerView = useMemo(() => {
-      const q = modelFilter.trim().toLowerCase();
-      // 老备份或非标准 /models 可能混入对象；渲染前再守一道，保证任何坏值都不会让设置页白屏。
-      const safeModels = normalizeModelIds(availableModels);
-      const filtered = q ? safeModels.filter(m => m.toLowerCase().includes(q)) : safeModels;
-      let commonPrefix = '';
-      if (filtered.length >= 2) {
-          let p = filtered[0];
-          for (let i = 1; i < filtered.length; i++) {
-              const s = filtered[i];
-              let j = 0;
-              while (j < p.length && j < s.length && p[j] === s[j]) j++;
-              p = p.slice(0, j);
-              if (!p) break;
-          }
-          const cut = Math.max(p.lastIndexOf('/'), p.lastIndexOf('-'));
-          if (cut > 3) p = p.slice(0, cut + 1);
-          if (p.length >= 4) commonPrefix = p;
-      }
-      return { filtered, commonPrefix };
-  }, [modelFilter, availableModels]);
+  const modelPickerView = useMemo(
+      () => buildModelPickerView(availableModels, modelFilter),
+      [modelFilter, availableModels],
+  );
+  const visionModelPickerView = useMemo(
+      () => buildModelPickerView(availableVisionModels, visionModelFilter),
+      [visionModelFilter, availableVisionModels],
+  );
 
   const refreshPpDiag = useCallback(async () => {
       try { setPpDiag(await getPushDiagnostics()); } catch { /* ignore */ }
@@ -764,6 +796,10 @@ const Settings: React.FC = () => {
       setLocalModel(String(apiConfig.model || ''));
       setLocalStream(apiConfig.stream === true);
       setLocalTemperature(typeof apiConfig.temperature === 'number' ? apiConfig.temperature : 0.85);
+      setLocalVisionEnabled(apiConfig.visionApi?.enabled === true);
+      setLocalVisionUrl(apiConfig.visionApi?.baseUrl || '');
+      setLocalVisionKey(apiConfig.visionApi?.apiKey || '');
+      setLocalVisionModel(apiConfig.visionApi?.model || '');
       setLocalMiniMaxKey(apiConfig.minimaxApiKey || '');
       setLocalMiniMaxGroupId(apiConfig.minimaxGroupId || '');
       setLocalMiniMaxRegion(apiConfig.minimaxRegion === 'overseas' ? 'overseas' : 'domestic');
@@ -886,6 +922,99 @@ const Settings: React.FC = () => {
         console.warn('[Settings] 刷新已排程任务的 API 凭据失败', error);
         addToast('API 已保存，但已排程的主动消息凭据刷新失败，稍后再保存一次可重试。', 'error');
       });
+  };
+
+  const handleSaveVisionApi = () => {
+    const nextVisionApi = {
+      enabled: localVisionEnabled,
+      baseUrl: normalizeApiBaseUrl(localVisionUrl),
+      apiKey: normalizeApiCredential(localVisionKey),
+      model: normalizeApiModel(localVisionModel),
+    };
+    if (nextVisionApi.enabled && (!nextVisionApi.baseUrl || !nextVisionApi.apiKey || !nextVisionApi.model)) {
+      addToast('开启识图 API 前，请填写完整的 URL、Key 和 Model', 'error');
+      return;
+    }
+    setLocalVisionUrl(nextVisionApi.baseUrl);
+    setLocalVisionKey(nextVisionApi.apiKey);
+    setLocalVisionModel(nextVisionApi.model);
+    updateApiConfig({ visionApi: nextVisionApi });
+    setVisionStatusMsg(nextVisionApi.enabled ? '识图 API 已接入' : '已关闭，沿用原有识图方式');
+    setTimeout(() => setVisionStatusMsg(''), 2200);
+  };
+
+  const loadVisionApiPreset = (preset: typeof apiPresets[0]) => {
+    const next = visionApiConfigFromPreset(preset);
+    setSelectedVisionPresetId(preset.id);
+    setLocalVisionEnabled(true);
+    setLocalVisionUrl(next.baseUrl);
+    setLocalVisionKey(next.apiKey);
+    setLocalVisionModel(next.model);
+    setVisionTestResult(null);
+    setVisionStatusMsg(`已载入预设：${preset.name}`);
+    setTimeout(() => setVisionStatusMsg(''), 2200);
+    addToast(`已把「${preset.name}」填入识图 API；保存后生效`, 'info');
+  };
+
+  const fetchVisionModels = async () => {
+    const baseUrl = normalizeApiBaseUrl(localVisionUrl);
+    const apiKey = normalizeApiCredential(localVisionKey);
+    if (!baseUrl) { setVisionStatusMsg('请先填写识图 URL'); return; }
+    setIsLoadingVisionModels(true);
+    setVisionStatusMsg('正在拉取识图模型...');
+    setVisionTestResult(null);
+    try {
+      const response = await fetch(`${baseUrl}/models`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const models = extractModelIds(await safeResponseJson(response));
+      if (models.length === 0) {
+        setVisionStatusMsg('模型列表为空或格式不兼容');
+        return;
+      }
+      setAvailableVisionModels(models);
+      try { localStorage.setItem(VISION_MODEL_LIST_STORAGE_KEY, JSON.stringify(models)); } catch { /* ignore */ }
+      if (!models.includes(normalizeApiModel(localVisionModel))) {
+        setLocalVisionModel(models[0]);
+        setSelectedVisionPresetId(null);
+      }
+      setVisionStatusMsg(`获取到 ${models.length} 个识图模型`);
+      setVisionModelFilter('');
+      setShowVisionModelModal(true);
+    } catch (error: any) {
+      console.error('Fetch Vision Models Error', error);
+      setVisionStatusMsg(`拉取失败${error?.message ? `：${error.message}` : ''}`);
+    } finally {
+      setIsLoadingVisionModels(false);
+    }
+  };
+
+  const handleTestVisionApi = async () => {
+    const config = {
+      enabled: true,
+      baseUrl: normalizeApiBaseUrl(localVisionUrl),
+      apiKey: normalizeApiCredential(localVisionKey),
+      model: normalizeApiModel(localVisionModel),
+    };
+    if (!config.baseUrl || !config.apiKey || !config.model) {
+      setVisionTestResult('❌ 请先填写完整的 URL、Key 和 Model');
+      return;
+    }
+    setTestingVisionApi(true);
+    setVisionTestResult(null);
+    try {
+      const description = await describeImageWithVisionApi(VISION_API_TEST_IMAGE_DATA_URL, config);
+      setVisionTestResult(`✅ 识图成功 — ${description.slice(0, 80)}`);
+      trackEvent('测试识图 API', { result: '成功' });
+    } catch (error: any) {
+      console.error('Test Vision API Error', error);
+      setVisionTestResult(`❌ 识图失败：${error?.message || '未知错误'}`);
+      trackEvent('测试识图 API', { result: '失败' });
+    } finally {
+      setTestingVisionApi(false);
+    }
   };
 
   const handleSaveOtherApis = () => {
@@ -1319,6 +1448,7 @@ const Settings: React.FC = () => {
               enabled: rtXhsMcpEnabled,
               serverUrl: rtXhsMode === 'lite' ? XHS_LITE_URL : rtXhsLocalUrl,
               cookie: rtXhsMode === 'lite' ? (rtXhsCookie.trim() || undefined) : undefined,
+              platform: rtXhsMode === 'lite' ? rtXhsPlatform : undefined,
               loggedInNickname: rtXhsNickname || undefined,
               loggedInUserId: rtXhsUserId || undefined,
               userXsecToken: realtimeConfig.xhsMcpConfig?.userXsecToken,
@@ -1411,18 +1541,21 @@ const Settings: React.FC = () => {
               trackEvent('测试小红书桥接连接', { mode: rtXhsMode === 'lite' ? 'lite' : 'local', result: 'connected' });
               const toolCount = result.tools?.length || 0;
               const tokenInfo = result.xsecToken ? ' | xsecToken 已获取' : '';
+              const platformInfo = result.platform ? ` | 平台: ${result.platform === 'rednote' ? 'RedNote' : '小红书'}` : '';
               const loginInfo = result.loggedIn
-                  ? ` | ${result.nickname ? `账号: ${result.nickname}` : '已登录'}${result.userId ? ` (ID: ${result.userId})` : ''}${tokenInfo}`
+                  ? `${platformInfo} | ${result.nickname ? `账号: ${result.nickname}` : '已登录'}${result.userId ? ` (ID: ${result.userId})` : ''}${tokenInfo}`
                   : ' | 未登录，请检查 cookie 或登录小红书';
               setRtTestStatus(`连接成功! ${toolCount} 个功能可用${loginInfo}`);
               // 自动填充：只在用户未手动填写时覆盖
               if (result.nickname && !rtXhsNickname) setRtXhsNickname(result.nickname);
               if (result.userId && !rtXhsUserId) setRtXhsUserId(result.userId);
+              setRtXhsPlatform(result.platform);
               const xhsUpdates = {
                   xhsMcpConfig: {
                       enabled: rtXhsMcpEnabled,
                       serverUrl: urlToUse,
                       cookie: cookieToUse,
+                      platform: result.platform,
                       loggedInNickname: rtXhsNickname || result.nickname,
                       loggedInUserId: rtXhsUserId || result.userId,
                       userXsecToken: result.xsecToken,
@@ -1977,6 +2110,164 @@ const Settings: React.FC = () => {
                         testApiResult.startsWith('✅') ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'
                     }`}>
                         {testApiResult}
+                    </div>
+                )}
+            </div>
+        </SettingsSection>
+
+        {/* 独立识图 API：给不支持 image_url 的主模型补视觉能力；可手动从通用模型预设载入。 */}
+        <SettingsSection
+            title="识图 API"
+            badge={
+                <span className={`text-[9px] font-bold px-2 py-1 rounded-full ${
+                    apiConfig.visionApi?.enabled
+                        ? 'bg-violet-100 text-violet-600'
+                        : 'bg-slate-100 text-slate-400'
+                }`}>
+                    {apiConfig.visionApi?.enabled ? '已接入' : '未接入'}
+                </span>
+            }
+            icon={
+                <div className="p-2 bg-violet-100/60 rounded-xl text-violet-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12s3.75-6.75 9.75-6.75S21.75 12 21.75 12 18 18.75 12 18.75 2.25 12 2.25 12Z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+                    </svg>
+                </div>
+            }
+        >
+            <div className="space-y-4">
+                <div className="rounded-2xl border border-violet-100 bg-violet-50/60 p-3.5">
+                    <div className="flex items-center justify-between gap-3">
+                        <div>
+                            <div className="text-xs font-bold text-slate-600">接入独立识图 API</div>
+                            <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
+                                适合 DeepSeek 等不能直接看图的主模型。
+                            </p>
+                        </div>
+                        <button
+                            type="button"
+                            role="switch"
+                            aria-checked={localVisionEnabled}
+                            onClick={() => setLocalVisionEnabled(value => !value)}
+                            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${localVisionEnabled ? 'bg-violet-500' : 'bg-slate-200'}`}
+                        >
+                            <span className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${localVisionEnabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                        </button>
+                    </div>
+                </div>
+
+                <p className="text-[10px] text-slate-400 leading-relaxed px-1">
+                    开启后，每张聊天图片只会先交给这里的视觉模型识别一次，并把结果写成
+                    <span className="font-semibold text-violet-600"> [图片：模型看到的内容] </span>
+                    再发给主 API；之后聊天和重 roll 都直接复用，不会重复识图扣费。关闭时完全沿用原来的图片发送逻辑。
+                </p>
+
+                <div className="rounded-2xl border border-violet-100 bg-white/70 p-3">
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                        <label className="text-[10px] font-bold text-violet-500 uppercase tracking-widest">从模型预设载入</label>
+                        <span className="text-[9px] text-slate-300">不会切换主 API</span>
+                    </div>
+                    {apiPresets.length > 0 ? (
+                        <div className="flex gap-2 flex-wrap">
+                            {apiPresets.map(preset => (
+                                <button
+                                    key={preset.id}
+                                    type="button"
+                                    onClick={() => loadVisionApiPreset(preset)}
+                                    className={`max-w-full px-3 py-1.5 rounded-lg border text-[11px] font-medium truncate transition-colors ${
+                                        selectedVisionPresetId === preset.id
+                                            ? 'bg-violet-100 border-violet-200 text-violet-700'
+                                            : 'bg-white border-slate-200 text-slate-500 hover:border-violet-200'
+                                    }`}
+                                    title={`${preset.name} · ${preset.config.model || '未配置模型'}`}
+                                >
+                                    {preset.name}
+                                </button>
+                            ))}
+                        </div>
+                    ) : (
+                        <p className="text-[10px] text-slate-400 leading-relaxed">还没有模型预设；可先在上方“API 配置”中保存预设，或直接手动填写。</p>
+                    )}
+                </div>
+
+                <div className={`space-y-3 transition-opacity ${localVisionEnabled ? 'opacity-100' : 'opacity-50'}`}>
+                    <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block pl-1">URL</label>
+                        <input
+                            type="text"
+                            value={localVisionUrl}
+                            onChange={event => { setLocalVisionUrl(event.target.value); setSelectedVisionPresetId(null); setVisionTestResult(null); }}
+                            disabled={!localVisionEnabled}
+                            placeholder="https://.../v1"
+                            className="w-full bg-white/60 border border-slate-200/60 rounded-xl px-4 py-2.5 text-sm font-mono focus:bg-white transition-all disabled:cursor-not-allowed"
+                        />
+                    </div>
+                    <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block pl-1">Key</label>
+                        <input
+                            type="password"
+                            value={localVisionKey}
+                            onChange={event => { setLocalVisionKey(event.target.value); setSelectedVisionPresetId(null); setVisionTestResult(null); }}
+                            disabled={!localVisionEnabled}
+                            placeholder="sk-..."
+                            className="w-full bg-white/60 border border-slate-200/60 rounded-xl px-4 py-2.5 text-sm font-mono focus:bg-white transition-all disabled:cursor-not-allowed"
+                        />
+                    </div>
+                    <div>
+                        <div className="flex justify-between items-center mb-1.5 pl-1">
+                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Model</label>
+                            <button
+                                type="button"
+                                onClick={fetchVisionModels}
+                                disabled={!localVisionEnabled || isLoadingVisionModels}
+                                className="text-[10px] text-violet-600 font-bold disabled:text-slate-300"
+                            >
+                                {isLoadingVisionModels ? 'Fetching...' : '刷新模型列表'}
+                            </button>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setShowVisionModelModal(true)}
+                            disabled={!localVisionEnabled}
+                            title={localVisionModel || '选择或手动输入模型'}
+                            className="w-full bg-white/60 border border-slate-200/60 rounded-xl px-4 py-3 text-sm text-slate-700 flex justify-between items-center gap-2 active:bg-white transition-all shadow-sm disabled:cursor-not-allowed"
+                        >
+                            <span className="font-mono overflow-hidden whitespace-nowrap min-w-0 flex-1 text-left text-ellipsis">
+                                {localVisionModel || '选择或手动输入模型...'}
+                            </span>
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400 shrink-0"><path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" /></svg>
+                        </button>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                    <button
+                        type="button"
+                        onClick={handleTestVisionApi}
+                        disabled={testingVisionApi || !localVisionEnabled || !localVisionUrl.trim() || !localVisionKey.trim() || !localVisionModel.trim()}
+                        className="py-3 rounded-2xl font-bold text-violet-600 border border-violet-200 bg-violet-50 active:scale-95 transition-all disabled:opacity-40"
+                    >
+                        {testingVisionApi ? '识图测试中…' : '🧪 测试识图'}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handleSaveVisionApi}
+                        disabled={isLoadingVisionModels || testingVisionApi}
+                        className="py-3 rounded-2xl font-bold text-white shadow-lg shadow-violet-500/20 bg-violet-500 active:scale-95 transition-all disabled:opacity-50"
+                    >
+                        保存识图 API
+                    </button>
+                </div>
+                {visionStatusMsg && (
+                    <div className="text-[11px] text-center text-violet-600 bg-violet-50 px-3 py-2 rounded-xl">{visionStatusMsg}</div>
+                )}
+                <p className="text-[9px] text-slate-300 px-1">测试会发送一张内置紫色圆点图，确认该模型真的能看图，并消耗一次极小请求。</p>
+                {visionTestResult && (
+                    <div className={`text-xs px-3 py-2 rounded-xl leading-relaxed ${
+                        visionTestResult.startsWith('✅') ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'
+                    }`}>
+                        {visionTestResult}
                     </div>
                 )}
             </div>
@@ -2630,7 +2921,7 @@ const Settings: React.FC = () => {
                 </button>
             </div>
             <p className="text-xs text-slate-500 leading-relaxed">
-                角色到点自动给你发消息，App 关着也能收。需要你自己部署一个 Cloudflare Worker（自带 D1 数据库 + 定时触发），在配置里填地址即可。与上方 Instant Push（你发消息才即时回）互补。
+                角色到点自动给你发消息，App 关着也能收。需要你自己部署一个 Cloudflare Worker（自带 D1 数据库 + 定时触发），在配置里填地址即可。聊天上云（即时对话）与定时主动消息都由它承担。
             </p>
         </section>
 
@@ -3092,6 +3383,93 @@ const Settings: React.FC = () => {
         })()}
       </Modal>
 
+      {/* 识图 API 使用独立模型列表，避免覆盖主 API 的模型选择。 */}
+      <Modal isOpen={showVisionModelModal} title="选择识图模型" onClose={() => setShowVisionModelModal(false)}>
+        {(() => {
+            const { filtered, commonPrefix } = visionModelPickerView;
+            return (
+                <div className="space-y-3 p-1">
+                    <div className="flex gap-2">
+                        <input
+                            type="text"
+                            value={localVisionModel}
+                            onChange={(event) => {
+                                setLocalVisionModel(event.target.value);
+                                setSelectedVisionPresetId(null);
+                                setVisionTestResult(null);
+                            }}
+                            placeholder="手动输入视觉模型名称..."
+                            className="flex-1 min-w-0 bg-white/50 border border-slate-200/60 rounded-xl px-4 py-2.5 text-sm font-mono focus:outline-violet-500 focus:bg-white transition-all"
+                        />
+                        <button
+                            onClick={() => setShowVisionModelModal(false)}
+                            className="px-4 py-2.5 bg-violet-500 text-white text-sm font-bold rounded-xl active:scale-95 transition-all"
+                        >
+                            确定
+                        </button>
+                    </div>
+                    {availableVisionModels.length > 0 && (
+                        <div className="relative">
+                            <input
+                                type="text"
+                                value={visionModelFilter}
+                                onChange={(event) => setVisionModelFilter(event.target.value)}
+                                placeholder={`🔍 搜索 ${availableVisionModels.length} 个识图模型...`}
+                                className="w-full bg-slate-50 border border-slate-200/60 rounded-xl px-4 py-2 text-xs focus:outline-violet-500 focus:bg-white transition-all"
+                            />
+                            {visionModelFilter && (
+                                <button
+                                    onClick={() => setVisionModelFilter('')}
+                                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs px-2"
+                                >×</button>
+                            )}
+                        </div>
+                    )}
+                    {commonPrefix && (
+                        <div className="text-[10px] text-slate-400 px-1 flex items-center gap-1 flex-wrap">
+                            <span>共同前缀:</span>
+                            <code className="font-mono bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded break-all">{commonPrefix}</code>
+                            <span className="text-slate-300">(下方已弱化显示)</span>
+                        </div>
+                    )}
+                    <div className="max-h-[40vh] overflow-y-auto no-scrollbar space-y-2">
+                        {filtered.length > 0 ? filtered.map(model => {
+                            const suffix = commonPrefix && model.startsWith(commonPrefix) ? model.slice(commonPrefix.length) : model;
+                            const selected = model === localVisionModel;
+                            return (
+                                <button
+                                    key={model}
+                                    onClick={() => {
+                                        setLocalVisionModel(model);
+                                        setSelectedVisionPresetId(null);
+                                        setVisionTestResult(null);
+                                        setShowVisionModelModal(false);
+                                    }}
+                                    title={model}
+                                    className={`w-full text-left px-4 py-3 rounded-xl text-sm font-mono flex justify-between items-start gap-2 ${selected ? 'bg-violet-100 text-violet-700 font-bold ring-1 ring-violet-200' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
+                                >
+                                    <span className="break-all min-w-0 flex-1 leading-relaxed">
+                                        {commonPrefix && suffix !== model && (
+                                            <span className={selected ? 'text-violet-400 font-normal' : 'text-slate-400 font-normal'}>{commonPrefix}</span>
+                                        )}
+                                        <span>{suffix}</span>
+                                    </span>
+                                    {selected && <div className="w-2 h-2 rounded-full bg-violet-500 mt-1.5 shrink-0" />}
+                                </button>
+                            );
+                        }) : (
+                            <div className="text-center text-slate-400 py-8 text-xs">
+                                {availableVisionModels.length === 0
+                                    ? '列表为空，可手动输入或点击“刷新模型列表”拉取'
+                                    : `没有匹配 "${visionModelFilter}" 的模型`}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        })()}
+      </Modal>
+
       {/* API 调用记录页面 */}
       <ApiCallLogModal isOpen={showApiCallLog} onClose={() => setShowApiCallLog(false)} />
 
@@ -3345,14 +3723,14 @@ const Settings: React.FC = () => {
                       </label>
                   </div>
                   <p className="text-[10px] text-rose-500/70 leading-relaxed">
-                      免电脑、免扫码：粘贴一次小红书 cookie，即可搜索/浏览/详情/点赞/收藏/评论/发帖(带图)。地址已内置，无需填写。
+                      免电脑、免扫码：粘贴一次小红书 / RedNote cookie，即可搜索、浏览、看详情及互动；国内小红书还支持发帖(带图)。地址已内置，无需填写。
                   </p>
                   <p className="text-[10px] text-amber-700 leading-relaxed bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">{XHS_RISK_TEXT}</p>
                   {rtXhsMcpEnabled && rtXhsMode === 'lite' && (
                       <div className="space-y-2">
                           <div>
                               <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">小红书 Cookie</label>
-                              <textarea value={rtXhsCookie} onChange={e => setRtXhsCookie(e.target.value)} rows={2} className="w-full bg-white/80 border border-rose-200 rounded-xl px-3 py-2 text-[10px] font-mono resize-y" placeholder="a1=...; web_session=...; （从浏览器登录后复制完整 cookie）" />
+                              <textarea value={rtXhsCookie} onChange={e => { setRtXhsCookie(e.target.value); setRtXhsPlatform(undefined); }} rows={2} className="w-full bg-white/80 border border-rose-200 rounded-xl px-3 py-2 text-[10px] font-mono resize-y" placeholder="a1=...; web_session=...; （从浏览器登录后复制完整 cookie）" />
                           </div>
                           <button onClick={testXhsMcp} className="w-full py-2 bg-rose-100 text-rose-600 text-xs font-bold rounded-xl active:scale-95 transition-transform">测试连接</button>
                           <div className="grid grid-cols-2 gap-2">

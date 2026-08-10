@@ -94,8 +94,9 @@ function poisonedSources(overrides: Partial<FeatureSources> = {}): FeatureSource
         apiPresetCount: 2,
         vrIndependentApi: true,
         characters: [],
-        // Worker 地址和共享密钥同样是用户填的，一起塞毒药。
-        amsg2Global: { workerUrl: POISON.url, initializedAt: 1_700_000_000_000 },
+        // Worker 地址和共享密钥同样是用户填的，一起塞毒药。即时对话开关是布尔，
+        // 放个 true 让「即时对话」那一格也走一遍扫毒。
+        amsg2Global: { workerUrl: POISON.url, initializedAt: 1_700_000_000_000, instantChatEnabled: true },
         ...overrides,
     };
 }
@@ -183,6 +184,13 @@ describe('当前功能启用 · 三态不能塌成两态', () => {
         expect(triState(false, true)).toBe('没配');
     });
 
+    it('即时对话只报开/关，关着和没配都算关', () => {
+        expect(collectFeatureFlags(poisonedSources()).即时对话).toBe('开');
+        expect(collectFeatureFlags(poisonedSources({
+            amsg2Global: { workerUrl: '', initializedAt: undefined },
+        })).即时对话).toBe('关');
+    });
+
     it('填了小红书桥接地址但开关关着 → 配了没开', () => {
         const flags = collectFeatureFlags(poisonedSources({
             realtimeConfig: poisonedRealtimeConfig({ xhsEnabled: false }),
@@ -252,9 +260,8 @@ describe('当前功能启用 · 开关值的判定', () => {
         expect(flags['主动消息2.0']).toBe('填了没连上');
     });
 
-    it('从没碰过 2.0 的角色不算「开了」——默认可用不等于用起来了', () => {
-        // isAmsg2EnabledForChar 对 config 缺失的角色返回 true（默认可用），
-        // 拿它数会把角色总数报成 2.0 用户数。
+    it('从没碰过 2.0 的角色不算「开了」', () => {
+        // config 缺失 = 用户在这个角色上没表过态，拿它数会把角色总数报成 2.0 用户数。
         const flags = collectFeatureFlags(poisonedSources({
             characters: [untouchedChar('a'), untouchedChar('b'), untouchedChar('c')],
         }));
@@ -269,22 +276,18 @@ describe('当前功能启用 · 开关值的判定', () => {
         expect(flags['开了2.0的角色数']).toBe('1');
     });
 
-    it('真在用 2.0 的人同时开着 Instant Push → 记一笔（那三样静默失效）', () => {
-        localStorage.setItem('instant_push_config_v1', JSON.stringify({
-            enabled: true, workerUrl: 'https://my-worker.invalid',
+    it('「单独关了即时对话的角色数」只数显式关掉的，跟随全局的不算', () => {
+        // 角色级开关缺省是「跟随全局」（undefined），只有用户在角色面板里主动关才落 false。
+        // 把 undefined 也当成关的话，这一格会变成角色总数，用它判断「这开关有没有人用」会判反。
+        const turnedOff = (id: string) => {
+            const ch = amsg2Char(id);
+            (ch.activeMsg2Config as { instantChatEnabled?: boolean }).instantChatEnabled = false;
+            return ch;
+        };
+        const flags = collectFeatureFlags(poisonedSources({
+            characters: [turnedOff('a'), amsg2Char('b'), untouchedChar('c')],
         }));
-        // isPushVapidReady 只看公钥长度（>60），内容无所谓
-        localStorage.setItem('push_vapid_v1', JSON.stringify({
-            vapidPublicKey: 'B'.repeat(87), vapidPrivateKey: 'k'.repeat(43),
-        }));
-        expect(collectFeatureFlags(poisonedSources({
-            characters: [amsg2Char('a', 1)],
-        }))['2.0与InstantPush同开']).toBe('是');
-
-        // 没人真在用 2.0 的话，光开着 instant 不算踩坑
-        expect(collectFeatureFlags(poisonedSources({
-            characters: [untouchedChar('a')],
-        }))['2.0与InstantPush同开']).toBe('否');
+        expect(flags['单独关了即时对话的角色数']).toBe('1');
     });
 
     it('不上报已经全局下线的主动消息 Push 加速', () => {
