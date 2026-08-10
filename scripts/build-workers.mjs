@@ -10,7 +10,11 @@
 //   2. add a row to WORKERS below
 //   3. that's it — `pnpm run build` (which chains to build:workers) picks it up
 //
-// The manifest is explicit so every generated artifact has a deliberate owner.
+// Why a manifest array instead of auto-discover: worker/proactive-push/ has
+// src/index.ts + wrangler.toml too, but its worker.bundle.js is hand-written
+// (not an esbuild artifact). A naive scan of worker/*/src/index.ts would
+// silently overwrite it. The manifest is explicit about which workers go
+// through this pipeline.
 
 import { build } from 'esbuild';
 import { existsSync, statSync, readFileSync, writeFileSync, copyFileSync } from 'fs';
