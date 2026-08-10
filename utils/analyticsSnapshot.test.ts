@@ -222,12 +222,12 @@ describe('当前功能启用 · 开关值的判定', () => {
         expect(collectFeatureFlags(poisonedSources()).QQ桥接).toBe('开');
     });
 
-    it('Instant Push 填了地址但没生成 VAPID 密钥 → 配了没开', () => {
+    it('个人版预置 VAPID 公钥后，Instant Push 地址和开关齐全 → 开', () => {
         localStorage.setItem('instant_push_config_v1', JSON.stringify({
             enabled: true, workerUrl: 'https://my-worker.invalid',
         }));
-        // push_vapid_v1 没设 → isPushVapidReady() 为 false
-        expect(collectFeatureFlags(poisonedSources()).InstantPush).toBe('配了没开');
+        // 个人版的安全默认值只包含公钥；私钥仍只存在 Cloudflare Worker。
+        expect(collectFeatureFlags(poisonedSources()).InstantPush).toBe('开');
     });
 
     it('MCP 分开数「配了几个 / 启用几个 / 连通几个」', () => {

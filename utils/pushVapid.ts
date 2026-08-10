@@ -12,13 +12,16 @@
  * API keys / client tokens, one more secret of comparable sensitivity
  * does not change the threat model.
  *
- * Default values are empty by design — there is no hardcoded fallback.
- * The user must generate (or paste) their own VAPID key pair via the
- * Instant Push settings modal, then mirror it into the Worker env.
+ * The personal deployment may provide only its public VAPID key as a safe
+ * default. The matching private key remains a Cloudflare Worker secret and
+ * is never bundled into the public site.
  */
+
+import { PERSONAL_VAPID_PUBLIC_KEY, PERSONAL_VAPID_VERSION } from '../config/personalFork';
 
 const PUSH_VAPID_KEY = 'push_vapid_v1';
 const LEGACY_INSTANT_KEY = 'instant_push_config_v1';
+const PERSONAL_VAPID_MIGRATION_KEY = 'personal_vapid_default_version';
 
 export interface PushVapid {
   vapidPublicKey: string;
@@ -28,7 +31,7 @@ export interface PushVapid {
 }
 
 const EMPTY: PushVapid = {
-  vapidPublicKey: '',
+  vapidPublicKey: PERSONAL_VAPID_PUBLIC_KEY,
   vapidPrivateKey: '',
 };
 
@@ -58,10 +61,29 @@ function migrateFromInstantConfigIfNeeded(): void {
   } catch { /* ignore */ }
 }
 
+function applyPersonalVapidDefaultIfNeeded(): void {
+  if (typeof localStorage === 'undefined' || !PERSONAL_VAPID_PUBLIC_KEY) return;
+  try {
+    if (localStorage.getItem(PERSONAL_VAPID_MIGRATION_KEY) === PERSONAL_VAPID_VERSION) return;
+
+    const raw = localStorage.getItem(PUSH_VAPID_KEY);
+    const current = raw ? { ...EMPTY, ...(JSON.parse(raw) as Partial<PushVapid>) } : { ...EMPTY };
+    if (current.vapidPublicKey !== PERSONAL_VAPID_PUBLIC_KEY) {
+      localStorage.setItem(PUSH_VAPID_KEY, JSON.stringify({
+        vapidPublicKey: PERSONAL_VAPID_PUBLIC_KEY,
+        vapidPrivateKey: '',
+        updatedAt: Date.now(),
+      } satisfies PushVapid));
+    }
+    localStorage.setItem(PERSONAL_VAPID_MIGRATION_KEY, PERSONAL_VAPID_VERSION);
+  } catch { /* ignore */ }
+}
+
 export function loadPushVapid(): PushVapid {
   if (typeof localStorage === 'undefined') return { ...EMPTY };
   try {
     migrateFromInstantConfigIfNeeded();
+    applyPersonalVapidDefaultIfNeeded();
     const raw = localStorage.getItem(PUSH_VAPID_KEY);
     if (raw) return { ...EMPTY, ...(JSON.parse(raw) as Partial<PushVapid>) };
   } catch { /* ignore */ }

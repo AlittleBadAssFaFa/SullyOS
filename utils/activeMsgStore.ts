@@ -6,6 +6,7 @@ import {
   InstantPushPendingToolCall,
   InstantPushReasoningBufferEntry,
 } from '../types';
+import { PERSONAL_AMSG2_WORKER } from '../config/personalFork';
 
 const DB_NAME = 'ActiveMsg';
 // v2 (Phase 2 Round 1): added outbound_sessions / pending_tool_calls / reasoning_buffer
@@ -36,7 +37,7 @@ const capacitorDefaultWorkerUrl = import.meta.env.VITE_AMSG_NATIVE_PUSH === 'tru
 
 const defaultGlobalConfig: ActiveMsg2GlobalConfig = {
   userId: '',
-  workerUrl: capacitorDefaultWorkerUrl,
+  workerUrl: capacitorDefaultWorkerUrl || PERSONAL_AMSG2_WORKER,
 };
 
 // 单例连接缓存。同 utils/db.ts 的根因: 原本每个 op 都新开一条 ActiveMsg 连接且从不
@@ -190,8 +191,11 @@ export const ActiveMsgStore = {
   async getGlobalConfig(): Promise<ActiveMsg2GlobalConfig> {
     const stored = await getKv<ActiveMsg2GlobalConfig>(GLOBAL_CONFIG_KEY);
     const config = { ...defaultGlobalConfig, ...(stored || {}) };
-    // Older App installs may already have persisted an empty URL. Fill only
-    // that empty value in the private build; an explicit non-empty URL wins.
+    // Preserve explicit custom URLs. Native builds retain their historical
+    // empty-value fallback; the web personal default applies to fresh stores.
+    // Native builds historically filled an explicitly empty value. For the
+    // web personal default, only an entirely new store gets the default from
+    // defaultGlobalConfig; an explicit empty value still means "disabled".
     if (!config.workerUrl?.trim() && capacitorDefaultWorkerUrl) {
       config.workerUrl = capacitorDefaultWorkerUrl;
     }
