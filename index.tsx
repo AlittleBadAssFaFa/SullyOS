@@ -4,21 +4,31 @@ import App from './App';
 import { installTranslateCrashGuard } from './utils/translateCrashGuard';
 import { ActiveMsgRuntime } from './utils/activeMsgRuntime';
 import { KeepAlive } from './utils/keepAlive';
+import { ProactiveChat } from './utils/proactiveChat';
 import { VRScheduler } from './utils/vrWorld/scheduler';
 import { installIOSStandaloneWorkaround } from './utils/iosStandalone';
+import { installWakeListener } from './utils/proactivePushConfig';
 import { initAnalytics } from './utils/analytics';
 import { Capacitor } from '@capacitor/core';
 
 // 默认构建不开启时 Rollup 会整段裁掉；普通浏览器/PWA 不加载原生插件、不申请权限。
 if (import.meta.env.VITE_AMSG_NATIVE_PUSH === 'true' && Capacitor.isNativePlatform()) {
-  void import('./utils/nativeAmsgPush').then(({ initNativeAmsgPush }) => initNativeAmsgPush());
+  if (Capacitor.getPlatform() === 'android') {
+    void import('./utils/unifiedPushRuntime').then(({ initUnifiedPushRuntime }) => initUnifiedPushRuntime());
+  } else {
+    void import('./utils/nativeAmsgPush').then(({ initNativeAmsgPush }) => initNativeAmsgPush());
+  }
 }
 
 // Register the keep-alive Service Worker early so it's ready before any AI calls
 KeepAlive.init().then(() => {
+  // Resume any active proactive schedule after SW is ready
+  ProactiveChat.resume();
   // Resume 「彼方」 autonomous-login schedules
   VRScheduler.resume();
   void ActiveMsgRuntime.init();
+  // Record every wake the SW reports so the diagnostic panel can show "last received".
+  installWakeListener();
 });
 
 installIOSStandaloneWorkaround();

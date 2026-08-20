@@ -10,7 +10,11 @@
 //   2. add a row to WORKERS below
 //   3. that's it — `pnpm run build` (which chains to build:workers) picks it up
 //
-// The manifest is explicit so every generated artifact has a deliberate owner.
+// Why a manifest array instead of auto-discover: worker/proactive-push/ has
+// src/index.ts + wrangler.toml too, but its worker.bundle.js is hand-written
+// (not an esbuild artifact). A naive scan of worker/*/src/index.ts would
+// silently overwrite it. The manifest is explicit about which workers go
+// through this pipeline.
 
 import { build } from 'esbuild';
 import { existsSync, statSync, readFileSync, writeFileSync, copyFileSync } from 'fs';
@@ -54,12 +58,6 @@ const WORKERS = [
   // public/ 副本给设置页「复制 Worker 代码」按钮 fetch。amsg-server 2.6.0-next.2 起
   // 全 Web Crypto，和 instant 一样免 nodejs_compat flag。
   { name: 'amsg', outName: 'amsg-worker.bundle.js' },
-  // loyal-recruitment 是一次性忠实用户招募服务：独立 D1 / secrets / 路由，
-  // 不与邮局或彼方活动共享运行时状态。
-  {
-    name: 'loyal-recruitment',
-    skipPublicOut: true,
-  },
 ];
 
 // amsg-instant 0.3.0+ uses only Web Crypto (globalThis.crypto.subtle); the

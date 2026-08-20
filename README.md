@@ -289,7 +289,7 @@ Phase 2 Round 2 起 push 路径跟本地 fetch 路径**功能对齐**，不再�
 
 **好消息**：现在**主代理已经统一成一个中心配置**，不用再满仓库改硬编码。
 
-**① 主代理 Worker**（本 Fork 默认使用 `sully-backend.badfafa.workers.dev`，源码单文件 [`worker/index.js`](./worker/index.js)）
+**① 主代理 Worker**（默认作者公共实例 `sullymeow.ccwu.cc`，源码单文件 [`worker/index.js`](./worker/index.js)）
 覆盖：联网搜索 / 热榜（Brave）、WebDAV 云备份、GitHub 云备份、Notion、飞书多维表格、麦当劳 / 瑞幸点单 MCP、网页抓取、Fish Audio TTS、音乐生成、网易云音乐（默认）。
 👉 二改只要在 **「设置 → 网络代理 (Worker)」** 填上你自己部署的地址，以上能力**一键全切走，不用改任何代码**。（`wrangler deploy` 把 `worker/index.js` 丢自己 CF 账号，拿到地址填进去即可。）
 
@@ -305,8 +305,6 @@ Phase 2 Round 2 起 push 路径跟本地 fetch 路径**功能对齐**，不再�
 **③ 彼方（VRWorld）的后端不用你操心 —— 但二次发布要删**
 
 彼方里的**邮局 / 漂流瓶**和**信号坠落处（特别活动）**连的是作者【所有用户共用】的后端 `noir2.cc.cd`（源码 `worker/post-office/`）——跨实例合写诗、投递漂流瓶全靠它。你自己 fork 玩**不用改、能直接连**。
-
-一次性忠实用户招募使用第三个独立服务 `worker/loyal-recruitment/`：拥有自己的 Worker、D1、路由和 secrets，只接收通过者 QQ，不复用邮局数据库。
 
 但**如果你二改是为了二次发布**：请把彼方的**邮局**和**特别活动（信号坠落处）删掉**。那些请求打在作者后端上，你**既管不到、也控制不了**，别把你用户的数据往作者服务器上灌。
 

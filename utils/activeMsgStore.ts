@@ -190,16 +190,10 @@ const generateUuidV4 = () => {
 export const ActiveMsgStore = {
   async getGlobalConfig(): Promise<ActiveMsg2GlobalConfig> {
     const stored = await getKv<ActiveMsg2GlobalConfig>(GLOBAL_CONFIG_KEY);
-    const config = { ...defaultGlobalConfig, ...(stored || {}) };
-    // Preserve explicit custom URLs. Native builds retain their historical
-    // empty-value fallback; the web personal default applies to fresh stores.
-    // Native builds historically filled an explicitly empty value. For the
-    // web personal default, only an entirely new store gets the default from
-    // defaultGlobalConfig; an explicit empty value still means "disabled".
-    if (!config.workerUrl?.trim() && capacitorDefaultWorkerUrl) {
-      config.workerUrl = capacitorDefaultWorkerUrl;
-    }
-    return config;
+    // Pre-fill the private Worker only for a brand-new installation. Once a
+    // config record exists, preserve the official meaning of an explicit
+    // empty URL (disabled / intentionally cleared).
+    return stored ? { ...defaultGlobalConfig, ...stored, workerUrl: stored.workerUrl ?? '' } : { ...defaultGlobalConfig };
   },
 
   async saveGlobalConfig(updates: Partial<ActiveMsg2GlobalConfig>): Promise<ActiveMsg2GlobalConfig> {
@@ -269,7 +263,7 @@ export const ActiveMsgStore = {
         messages = (request.result || []) as ActiveMsg2InboxMessage[];
         // amsg-instant 0.8+ 一个 user turn 可能产 N 条 push (multi-chunk
         // pushPayloads). FCM 投递不严格保序, 必须按 (sessionId, messageIndex) 排序
-        // 才能拿到正确气泡顺序. 没 sessionId 的旧 worker 消息
+        // 才能拿到正确气泡顺序. 没 sessionId 的 (老 worker / proactive push 等)
         // 走 sentAt fallback 保持兼容.
         messages.sort((a, b) => {
           const aSess = a.metadata?.sessionId as string | undefined;

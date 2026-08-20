@@ -9,10 +9,12 @@ import { VALID_INTERJECTION_TAGS, cleanVoiceMarkupForDisplay } from '../../utils
 import { stripFishCuesForDisplay } from '../../utils/fishAudioTts';
 import { formatStatCount } from '../../utils/videoParser';
 import { trackEvent } from '../../utils/analytics';
+import { resolveBubbleCornerRadii, shouldHideBubbleTail } from '../../utils/bubbleAppearance';
 import McdCard from './McdCard';
 import HtmlCard from './HtmlCard';
 import LuckinCard from './LuckinCard';
 import LuckinCheckoutCard from './LuckinCheckoutCard';
+import QixiEventCardView from './QixiEventCard';
 
 // 思考链卡片支持的 12 种风格预设 — 同时被 MessageItem 与 ThinkingChainSettingsModal 复用
 export type ThinkingChainStyleId = 'echo' | 'whisper' | 'minimal' | 'ink' | 'neon' | 'terminal' | 'stellar' | 'tama' | 'pixel' | 'muji' | 'ins' | 'custom';
@@ -1370,6 +1372,10 @@ interface MessageItemProps {
     charAvatar: string;
     charName: string;
     userAvatar: string;
+    /** 当前窗口里的最后一条消息；最新图片需要立即解码，避免移动端懒加载卡在滚动容器底部。 */
+    isLatestMessage?: boolean;
+    /** 图片完成解码并确定高度后，通知聊天列表重新校准贴底位置。 */
+    onMediaLoad?: (messageId: number) => void;
     onLongPress: (m: Message) => void;
     onReply: (m: Message) => void;
     selectionMode: boolean;
@@ -1380,6 +1386,7 @@ interface MessageItemProps {
     onToggleThinkingSelect?: (id: number) => void;
     // Translation (AI messages only, bilingual content parsed from %%BILINGUAL%%)
     translationEnabled?: boolean;
+    translationExpanded?: boolean;
     isShowingTarget?: boolean;
     onTranslateToggle?: (msgId: number) => void;
     // Voice TTS
@@ -1428,6 +1435,8 @@ const MessageItem = React.memo(({
     charAvatar,
     charName,
     userAvatar,
+    isLatestMessage = false,
+    onMediaLoad,
     onLongPress,
     onReply,
     selectionMode,
@@ -1436,6 +1445,7 @@ const MessageItem = React.memo(({
     isThinkingSelected,
     onToggleThinkingSelect,
     translationEnabled,
+    translationExpanded,
     isShowingTarget,
     onTranslateToggle,
     voiceData,
@@ -1917,7 +1927,9 @@ const MessageItem = React.memo(({
             )}
             <div className={[
                 'sully-chat-message',
-                isUser ? 'sully-chat-message-user justify-end' : 'sully-chat-message-ai justify-start',
+                isUser
+                    ? 'sully-chat-message-user justify-end'
+                    : `sully-chat-message-ai ${isModuleCard && centerModules ? 'justify-center' : 'justify-start'}`,
                 isFirstInGroup ? 'sully-chat-message-group-first' : '',
                 isLastInGroup ? 'sully-chat-message-group-last' : '',
                 isModuleCard ? 'sully-chat-message-module' : '',
@@ -1967,7 +1979,7 @@ const MessageItem = React.memo(({
                     Added min-w-0 to prevent flexbox overflow issues.
                     Added explicit margins to clear absolute avatars.
                 */}
-                <div className={`sully-chat-message-content relative max-w-[72%] min-w-0 ${isModuleCard && centerModules ? 'mx-auto' : (!isUser ? 'ml-12' : 'mr-12')} ${isModuleCard ? 'sully-html-wrap' : ''}`}>
+                <div className={`sully-chat-message-content relative min-w-0 ${isModuleCard && centerModules ? 'w-fit max-w-full mx-auto' : `max-w-[72%] ${!isUser ? 'ml-12' : 'mr-12'}`} ${isModuleCard ? 'sully-html-wrap' : ''}`}>
                     <div
                         aria-hidden="true"
                         className={`absolute -right-10 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full flex items-center justify-center pointer-events-none transition-all duration-150 ${isReplyReady ? 'bg-indigo-500 text-white shadow-md shadow-indigo-200' : 'bg-white/90 text-slate-400 shadow-sm'}`}
@@ -1982,7 +1994,7 @@ const MessageItem = React.memo(({
                         </svg>
                     </div>
                     <div
-                        className={`relative flex flex-col ${isUser ? 'items-end' : 'items-start'} min-w-0`}
+                        className={`relative flex flex-col ${isModuleCard && centerModules ? 'items-center' : (isUser ? 'items-end' : 'items-start')} min-w-0`}
                         style={{
                             transform: `translateX(${replyOffset}px)`,
                             transition: isReplyGestureActive ? 'none' : 'transform 220ms cubic-bezier(0.22, 1, 0.36, 1)',
@@ -3054,6 +3066,10 @@ const MessageItem = React.memo(({
             return commonLayout(<LifeSimResetCardView card={scoreData} />);
         }
 
+        if (scoreData?.type === 'qixi_event_card') {
+            return commonLayout(<QixiEventCardView card={scoreData} timestamp={m.timestamp} interactionProps={interactionProps} />);
+        }
+
         // Guidebook End Card
         if (scoreData?.type === 'guidebook_card') {
             const diff = scoreData.finalAffinity - scoreData.initialAffinity;
@@ -3272,7 +3288,14 @@ const MessageItem = React.memo(({
         return commonLayout(
             <div className="relative group">
                 {m.content ? (
-                    <img src={m.content} className="max-w-[200px] max-h-[300px] rounded-2xl" alt="Uploaded" loading="lazy" decoding="async" />
+                    <img
+                        src={m.content}
+                        className="max-w-[200px] max-h-[300px] rounded-2xl"
+                        alt="Uploaded"
+                        loading={isLatestMessage ? 'eager' : 'lazy'}
+                        decoding="async"
+                        onLoad={() => onMediaLoad?.(m.id)}
+                    />
                 ) : (
                     <div className="px-4 py-6 rounded-2xl bg-slate-100 text-slate-400 text-xs italic text-center min-w-[120px]">[图片已丢失]</div>
                 )}
@@ -3281,8 +3304,19 @@ const MessageItem = React.memo(({
     }
 
     // --- Dynamic Style Generation for Bubble ---
-    const radius = styleConfig.borderRadius;
-    const borderObj: React.CSSProperties = { borderRadius: `${radius}px` };
+    const cornerRadii = resolveBubbleCornerRadii(styleConfig);
+    const borderObj: React.CSSProperties = {
+        borderTopLeftRadius: `${cornerRadii.topLeft}px`,
+        borderTopRightRadius: `${cornerRadii.topRight}px`,
+        borderBottomRightRadius: `${cornerRadii.bottomRight}px`,
+        borderBottomLeftRadius: `${cornerRadii.bottomLeft}px`,
+    };
+    const hideBubbleTail = shouldHideBubbleTail(styleConfig.tailMode, isLastInGroup);
+    const bubbleGroupClasses = [
+        isFirstInGroup ? 'sully-bubble-group-first' : '',
+        isLastInGroup ? 'sully-bubble-group-last' : '',
+        hideBubbleTail ? 'sully-bubble-tail-hidden' : 'sully-bubble-tail-visible',
+    ].filter(Boolean).join(' ');
 
     // Container style (BackgroundColor + Opacity) with bubble variant
     const containerStyle: React.CSSProperties = {
@@ -3432,9 +3466,12 @@ const MessageItem = React.memo(({
     const langAContent = hasBilingual ? stripJunk(rawContent.substring(0, bilingualIdx)) : stripJunk(rawContent);
     const langBContent = hasBilingual ? stripJunk(rawContent.substring(bilingualIdx + '%%BILINGUAL%%'.length)) : '';
 
-    // Display: "选" language by default, "译" language when toggled
-    const displayContent = (isShowingTarget && langBContent) ? langBContent : langAContent;
-    const showTranslateButton = translationEnabled && hasBilingual && langBContent;
+    // Display: 默认点击切换；可选“直接展开”时，上方原文 + 下方译文同时显示。
+    const showExpandedTranslation = Boolean(translationEnabled && translationExpanded && hasBilingual && langBContent);
+    const displayContent = showExpandedTranslation
+        ? langAContent
+        : (isShowingTarget && langBContent) ? langBContent : langAContent;
+    const showTranslateButton = translationEnabled && !showExpandedTranslation && hasBilingual && langBContent;
 
     // Check if raw content has a <语音> tag (voice-only message that hasn't been TTS'd yet).
     // 未闭合的开标签也算 (历史坏数据: 语音块曾被 chunkText 切碎, 开标签落单) —
@@ -3465,7 +3502,7 @@ const MessageItem = React.memo(({
     return commonLayout(
         <div className={isVoiceOnlyMsg
             ? `relative ${suppressEntranceAnimation ? '' : 'animate-fade-in'}`
-            : `relative ${bubbleVariant === 'flat' || bubbleVariant === 'outline' || bubbleVariant === 'wechat' ? '' : 'shadow-sm '}px-5 py-3 ${suppressEntranceAnimation ? '' : 'animate-fade-in'} ${bubbleVariant === 'outline' ? '' : 'border border-black/5 '}active:scale-[0.98] transition-transform overflow-visible ${isUser ? 'sully-bubble-user' : 'sully-bubble-ai'}`}
+            : `relative ${bubbleVariant === 'flat' || bubbleVariant === 'outline' || bubbleVariant === 'wechat' ? '' : 'shadow-sm '}px-5 py-3 ${suppressEntranceAnimation ? '' : 'animate-fade-in'} ${bubbleVariant === 'outline' ? '' : 'border border-black/5 '}active:scale-[0.98] transition-transform overflow-visible ${isUser ? 'sully-bubble-user' : 'sully-bubble-ai'} ${bubbleGroupClasses}`}
             style={isVoiceOnlyMsg ? undefined : containerStyle}>
 
             {/* Layer 1: Background Image with Independent Opacity */}
@@ -3507,6 +3544,12 @@ const MessageItem = React.memo(({
             {displayContent && !isForeignVoiceMsg && (
             <div className="relative z-10 text-[15px] leading-relaxed whitespace-pre-wrap break-all select-text" style={{ color: styleConfig.textColor }}>
                 {renderContent(displayContent)}
+                {showExpandedTranslation && (
+                    <div className="mt-2.5 pt-2 border-t border-current/15">
+                        <div className="mb-1 text-[9px] font-bold tracking-[0.16em] opacity-40 select-none">翻译</div>
+                        {renderContent(langBContent)}
+                    </div>
+                )}
             </div>
             )}
 
@@ -3547,12 +3590,12 @@ const MessageItem = React.memo(({
                 // 外语语音消息顶部正文已隐藏（交给语音条渲染），同样按纯语音处理，去掉多余上间距。
                 const isVoiceOnly = !!voiceData?.url && (!displayContent || isForeignVoiceMsg);
                 return (
-                <div className={`relative z-10 ${isVoiceOnly ? '' : 'mt-2.5'}`}>
+                <div className={`sully-voice-bar-shell relative z-10 ${isVoiceOnly ? '' : 'mt-2.5'}`}>
                     {voiceData?.url ? (
                         <div className="max-w-[260px]">
                             <button
                                 onClick={(e) => { e.stopPropagation(); e.preventDefault(); onPlayVoice?.(m.id); if (!isVoicePlaying) trackEvent('播放语音条'); }}
-                                className="group flex items-center gap-2.5 w-full px-3 py-2 rounded-2xl transition-all duration-300 active:scale-[0.97] select-none"
+                                className="sully-voice-bar group flex items-center gap-2.5 w-full px-3 py-2 rounded-2xl transition-all duration-300 active:scale-[0.97] select-none"
                                 style={{
                                     background: isVoicePlaying
                                         ? (vbActiveBg || 'linear-gradient(135deg, rgba(16,185,129,0.12) 0%, rgba(52,211,153,0.08) 100%)')
@@ -3563,7 +3606,7 @@ const MessageItem = React.memo(({
                                 }}
                             >
                                 {/* Play/Pause circle */}
-                                <div className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center transition-all duration-300"
+                                <div className="sully-voice-bar-button shrink-0 w-7 h-7 rounded-full flex items-center justify-center transition-all duration-300"
                                     style={{
                                         backgroundColor: isVoicePlaying ? (vbBtn || '#10b981') : (vbBg ? 'rgba(255,255,255,0.25)' : 'rgba(148,163,184,0.2)'),
                                         boxShadow: isVoicePlaying ? `0 2px 8px ${vbBtn ? vbBtn + '4D' : 'rgba(16,185,129,0.3)'}` : 'none',
@@ -3576,11 +3619,11 @@ const MessageItem = React.memo(({
                                     )}
                                 </div>
                                 {/* Waveform bars */}
-                                <div className="flex-1 flex items-center gap-[3px] h-5 overflow-hidden">
+                                <div className="sully-voice-bar-wave flex-1 flex items-center gap-[3px] h-5 overflow-hidden">
                                     {[4, 10, 6, 14, 8, 12, 5, 11, 7, 13, 4, 9, 6, 11, 5, 8, 10, 7, 12, 6].map((h, i) => (
                                         <div
                                             key={i}
-                                            className={`w-[2.5px] rounded-full transition-all duration-150 ${isVoicePlaying ? 'animate-pulse' : ''}`}
+                                            className={`sully-voice-bar-wave-segment w-[2.5px] rounded-full transition-all duration-150 ${isVoicePlaying ? 'animate-pulse' : ''}`}
                                             style={{
                                                 height: isVoicePlaying ? `${Math.max(3, h + Math.sin(i * 0.8) * 3)}px` : `${Math.max(2, h * 0.4)}px`,
                                                 backgroundColor: isVoicePlaying
@@ -3594,7 +3637,7 @@ const MessageItem = React.memo(({
                                 </div>
                                 {/* Text toggle button — always available so user can read the text */}
                                 <div
-                                    className={`shrink-0 ml-0.5 px-1.5 py-0.5 rounded-lg text-[9px] font-medium transition-all ${showVoiceText ? 'ring-1 ring-current/20' : ''}`}
+                                    className={`sully-voice-bar-toggle shrink-0 ml-0.5 px-1.5 py-0.5 rounded-lg text-[9px] font-medium transition-all ${showVoiceText ? 'ring-1 ring-current/20' : ''}`}
                                     style={{
                                         color: vbText || 'rgba(100,116,139,0.7)',
                                         backgroundColor: showVoiceText ? 'rgba(0,0,0,0.08)' : 'rgba(0,0,0,0.04)',
@@ -3612,7 +3655,7 @@ const MessageItem = React.memo(({
                             {/* Expandable text area — shows spoken text + Chinese translation */}
                             {showVoiceText && (
                                 <div>
-                                    <div className="mt-1.5 px-3 py-2 rounded-xl text-[11px] leading-relaxed space-y-1"
+                                    <div className="sully-voice-bar-transcript mt-1.5 px-3 py-2 rounded-xl text-[11px] leading-relaxed space-y-1"
                                         style={{
                                             backgroundColor: vbBg || 'rgba(0,0,0,0.02)',
                                             color: vbText || '#475569',
@@ -3653,7 +3696,7 @@ const MessageItem = React.memo(({
                             )}
                         </div>
                     ) : voiceLoading ? (
-                        <div className="flex items-center gap-2 px-3 py-2 max-w-[200px] rounded-2xl" style={{ background: vbBg || 'linear-gradient(135deg, rgba(0,0,0,0.02) 0%, rgba(0,0,0,0.04) 100%)', border: '1px solid rgba(0,0,0,0.04)' }}>
+                        <div className="sully-voice-bar sully-voice-bar-loading flex items-center gap-2 px-3 py-2 max-w-[200px] rounded-2xl" style={{ background: vbBg || 'linear-gradient(135deg, rgba(0,0,0,0.02) 0%, rgba(0,0,0,0.04) 100%)', border: '1px solid rgba(0,0,0,0.04)' }}>
                             <div className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center" style={{ backgroundColor: vbBg ? 'rgba(255,255,255,0.2)' : '#f1f5f9' }}>
                                 <svg className="animate-spin h-3.5 w-3.5" style={{ color: vbBtn || '#94a3b8' }} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3.5"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                             </div>
@@ -3671,7 +3714,7 @@ const MessageItem = React.memo(({
                            aligning fake voice messages with real ones. */
                         <div className="max-w-[260px]">
                             <div
-                                className="flex items-center gap-2 px-3 py-2 rounded-2xl"
+                                className="sully-voice-bar sully-voice-bar-placeholder flex items-center gap-2 px-3 py-2 rounded-2xl"
                                 style={{ background: vbBg || 'linear-gradient(135deg, rgba(0,0,0,0.03) 0%, rgba(0,0,0,0.06) 100%)', border: '1px solid rgba(0,0,0,0.05)' }}
                             >
                                 <button
@@ -3702,7 +3745,7 @@ const MessageItem = React.memo(({
                                 )}
                             </div>
                             {showVoiceText && (voiceTagText || displayContent) && (
-                                <div className="mt-1.5 px-3 py-2 rounded-xl text-[11px] leading-relaxed whitespace-pre-wrap"
+                                <div className="sully-voice-bar-transcript mt-1.5 px-3 py-2 rounded-xl text-[11px] leading-relaxed whitespace-pre-wrap"
                                     style={{
                                         backgroundColor: vbBg || 'rgba(0,0,0,0.02)',
                                         color: vbText || '#475569',
@@ -3734,9 +3777,12 @@ const MessageItem = React.memo(({
            prev.charAvatar === next.charAvatar &&
            prev.charName === next.charName &&
            prev.userAvatar === next.userAvatar &&
+           prev.isLatestMessage === next.isLatestMessage &&
+           prev.onMediaLoad === next.onMediaLoad &&
            prev.selectionMode === next.selectionMode &&
            prev.isSelected === next.isSelected &&
            prev.translationEnabled === next.translationEnabled &&
+           prev.translationExpanded === next.translationExpanded &&
            prev.isShowingTarget === next.isShowingTarget &&
            prev.avatarShape === next.avatarShape &&
            prev.avatarSize === next.avatarSize &&

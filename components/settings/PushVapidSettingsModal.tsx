@@ -13,7 +13,7 @@ interface PushVapidSettingsModalProps {
 /**
  * 推送凭据 (VAPID) 配置面板.
  *
- * 抽出来单独管理是因为主动消息 2.0 和 Instant Push 共用一份 VAPID — 两边
+ * 抽出来单独管理是因为 Proactive Push 和 Instant Push 共用一份 VAPID — 两边
  * 用不同的 key 时会反复 unsubscribe 抢同一个 pushManager 订阅. 把 UI 提到
  * 顶层后, 用户一眼看到这是全局推送凭据, 不会再以为它属于 Instant Push.
  *
@@ -150,7 +150,7 @@ export const PushVapidSettingsModal: React.FC<PushVapidSettingsModalProps> = ({ 
           <p className="font-bold mb-1">⚠ 一份 VAPID, 两个用法</p>
           <p>
             浏览器订阅 push 用<b>公钥</b>; Worker 签名 push 用<b>私钥</b>.
-            主动消息 2.0 和 Instant Push <b>都从这里读公钥</b> ——
+            Proactive Push 和 Instant Push <b>都从这里读公钥</b> ——
             两边公钥不一致会反复 unsubscribe 抢同一个订阅, 是 "推送配额没掉但是收不到通知" 的常见原因.
           </p>
           <p className="mt-1">

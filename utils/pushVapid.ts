@@ -1,8 +1,8 @@
 /**
  * Shared VAPID credentials store.
  *
- * Both Instant Push (utils/instantPushClient.ts) and Active Messaging 2.0
- * read VAPID from here so they don't fight
+ * Both Instant Push (utils/instantPushClient.ts) and Proactive Push
+ * (utils/proactivePushConfig.ts) read VAPID from here so they don't fight
  * over the single per-origin pushManager.subscription — same VAPID → no
  * unsubscribe-and-rebuild churn.
  *
@@ -12,9 +12,9 @@
  * API keys / client tokens, one more secret of comparable sensitivity
  * does not change the threat model.
  *
- * The personal deployment may provide only its public VAPID key as a safe
- * default. The matching private key remains a Cloudflare Worker secret and
- * is never bundled into the public site.
+ * Default values are empty by design — there is no hardcoded fallback.
+ * The user must generate (or paste) their own VAPID key pair via the
+ * Instant Push settings modal, then mirror it into the Worker env.
  */
 
 import { PERSONAL_VAPID_PUBLIC_KEY, PERSONAL_VAPID_VERSION } from '../config/personalFork';
@@ -61,16 +61,21 @@ function migrateFromInstantConfigIfNeeded(): void {
   } catch { /* ignore */ }
 }
 
-function applyPersonalVapidDefaultIfNeeded(): void {
+// Keep existing installs on this private deployment's public VAPID key. The
+// matching private key remains only in the Worker secret; never ship it here.
+function migratePersonalDefaultIfNeeded(): void {
   if (typeof localStorage === 'undefined' || !PERSONAL_VAPID_PUBLIC_KEY) return;
   try {
     if (localStorage.getItem(PERSONAL_VAPID_MIGRATION_KEY) === PERSONAL_VAPID_VERSION) return;
-
     const raw = localStorage.getItem(PUSH_VAPID_KEY);
-    const current = raw ? { ...EMPTY, ...(JSON.parse(raw) as Partial<PushVapid>) } : { ...EMPTY };
+    const current = raw
+      ? { ...EMPTY, ...(JSON.parse(raw) as Partial<PushVapid>) }
+      : { ...EMPTY };
     if (current.vapidPublicKey !== PERSONAL_VAPID_PUBLIC_KEY) {
       localStorage.setItem(PUSH_VAPID_KEY, JSON.stringify({
+        ...current,
         vapidPublicKey: PERSONAL_VAPID_PUBLIC_KEY,
+        // A private key paired with another public key would be misleading.
         vapidPrivateKey: '',
         updatedAt: Date.now(),
       } satisfies PushVapid));
@@ -83,7 +88,7 @@ export function loadPushVapid(): PushVapid {
   if (typeof localStorage === 'undefined') return { ...EMPTY };
   try {
     migrateFromInstantConfigIfNeeded();
-    applyPersonalVapidDefaultIfNeeded();
+    migratePersonalDefaultIfNeeded();
     const raw = localStorage.getItem(PUSH_VAPID_KEY);
     if (raw) return { ...EMPTY, ...(JSON.parse(raw) as Partial<PushVapid>) };
   } catch { /* ignore */ }
@@ -105,7 +110,10 @@ export function savePushVapid(v: PushVapid): void {
 
 export function clearPushVapid(): void {
   if (typeof localStorage === 'undefined') return;
-  try { localStorage.removeItem(PUSH_VAPID_KEY); } catch { /* ignore */ }
+  try {
+    localStorage.removeItem(PUSH_VAPID_KEY);
+    localStorage.removeItem(PERSONAL_VAPID_MIGRATION_KEY);
+  } catch { /* ignore */ }
 }
 
 export function isPushVapidReady(v?: PushVapid): boolean {

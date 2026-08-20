@@ -8,7 +8,8 @@ describe('stripSensitiveCardFields', () => {
       systemPrompt: '你是小明',
       emotionConfig: { enabled: true, api: { baseUrl: 'https://x', apiKey: 'sk-SECRET', model: 'gpt' } },
       embeddingConfig: { baseUrl: 'https://x', apiKey: 'sk-SECRET2', model: 'emb', dimensions: 1024 },
-      activeMsg2Config: { enabled: true, secondaryApi: { apiKey: 'sk-SECRET3' } },
+      proactiveConfig: { enabled: true, intervalMinutes: 60, secondaryApi: { baseUrl: 'https://x', apiKey: 'sk-SECRET3', model: 'gpt' } },
+      activeMsg2Config: { enabled: true, secondaryApi: { apiKey: 'sk-SECRET4' } },
     };
 
     const out = stripSensitiveCardFields(card);
@@ -19,6 +20,7 @@ describe('stripSensitiveCardFields', () => {
     expect(json).not.toContain('sk-SECRET');
     expect(out).not.toHaveProperty('emotionConfig');
     expect(out).not.toHaveProperty('embeddingConfig');
+    expect(out).not.toHaveProperty('proactiveConfig');
     expect(out).not.toHaveProperty('activeMsg2Config');
   });
 
@@ -43,6 +45,9 @@ describe('stripSensitiveCardFields', () => {
       buffInjection: '（开心）',
       phoneState: { records: [] },
       savedDateState: { foo: 1 },
+      videoCallPerformancePersona: '只在本机使用的表演人格摘要',
+      videoCallPerformancePersonaGeneratedAt: 123456,
+      companionTouchSettings: { enabledZones: ['head'], reactions: { head: [{ id: 'head-1', text: '私人台词', performance: {} }] } },
     };
 
     const out = stripSensitiveCardFields(card);
@@ -54,7 +59,8 @@ describe('stripSensitiveCardFields', () => {
 
     // 全部被剥离
     for (const key of ['bubbleStyle', 'chatFineTune', 'chromeCustomCss', 'embeddedTheme', 'chatBackground',
-      'chatVoiceLang', 'dateVoiceLang', 'memoryPalaceWaterline', 'activeBuffs', 'buffInjection', 'phoneState', 'savedDateState']) {
+      'chatVoiceLang', 'dateVoiceLang', 'activeBuffs', 'buffInjection', 'phoneState', 'savedDateState',
+      'videoCallPerformancePersona', 'videoCallPerformancePersonaGeneratedAt', 'companionTouchSettings']) {
       expect(out).not.toHaveProperty(key);
     }
   });

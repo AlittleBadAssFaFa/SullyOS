@@ -168,8 +168,36 @@ describe('v2 真实链路：分片 → 组装 → importFullData', () => {
 
         // media_only 形状：没有 characters 字段（关键！），只有 mediaAssets + 过滤后的 image 消息
         const backupData = {
-            mediaAssets: [{ charId: 'c1', avatar: 'new-avatar', backgrounds: {} }],
-            messages: [{ id: 2, charId: 'c1', type: 'image', content: 'img' }],
+            mediaAssets: [{
+                charId: 'c1',
+                avatar: 'new-avatar',
+                companionAvatar: { version: 1, source: 'upload', imageRef: 'blobref:static-companion' },
+                companionTouchSettings: {
+                    enabledZones: ['head'],
+                    reactions: { head: [{ id: 'touch-1', text: '别揉乱啦', performance: { emotion: 'happy', gesture: 'idle' }, voiceAssetId: 'companion-touch-voice:c1:pack:head:0' }] },
+                    touchPresets: [{
+                        id: 'touch-preset-1',
+                        name: '摸头',
+                        enabledZones: ['head'],
+                        reactions: { head: [{ id: 'touch-1', text: '别揉乱啦', performance: { emotion: 'happy', gesture: 'idle' }, voiceAssetId: 'companion-touch-voice:c1:pack:head:0' }] },
+                        createdAt: 1,
+                        updatedAt: 1,
+                    }],
+                    activeTouchPresetId: 'touch-preset-1',
+                },
+                backgrounds: {},
+            }],
+            messages: [
+                { id: 2, charId: 'c1', type: 'image', content: 'img' },
+                {
+                    id: 3,
+                    charId: 'c1',
+                    role: 'user',
+                    type: 'text',
+                    content: 'video turn',
+                    metadata: { source: 'call', callSessionId: 'call-1', cameraSnapshotExpired: true },
+                },
+            ],
         };
         const zip = new FakeZip();
         const manifest = await writeV2Backup(zip, backupData, {});
@@ -182,9 +210,13 @@ describe('v2 真实链路：分片 → 组装 → importFullData', () => {
         expect(c1.name).toBe('Alice');        // 文字字段存活
         expect(c1.bio).toBe('text-bio');      // 文字字段存活
         expect(c1.avatar).toBe('new-avatar'); // 媒体被 patch
+        expect(c1.companionAvatar).toEqual({ version: 1, source: 'upload', imageRef: 'blobref:static-companion' });
+        expect(c1.companionTouchSettings.activeTouchPresetId).toBe('touch-preset-1');
+        expect(c1.companionTouchSettings.touchPresets[0].reactions.head[0].voiceAssetId)
+            .toBe('companion-touch-voice:c1:pack:head:0');
         // 老文字消息 id1 没被清，新 image id2 加上（patch/merge，不 clear）
         const msgIds = (await DB.getRawStoreData('messages')).map((m: any) => m.id).sort();
-        expect(msgIds).toEqual([1, 2]);
+        expect(msgIds).toEqual([1, 2, 3]);
     });
 
     it('空数组按 shape 还原：clear-and-add 清、merge 不动、单例省略不动（test 9）', async () => {

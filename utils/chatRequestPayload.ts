@@ -13,8 +13,14 @@
  */
 
 import type { CharacterProfile, UserProfile, GroupProfile, Emoji, EmojiCategory, Message, RealtimeConfig, TranslationConfig, VisionApiConfig } from '../types';
-import { ChatPrompts } from './chatPrompts';
+import { ChatPrompts, detectChatModeTransition } from './chatPrompts';
 import { injectMemoryPalace } from './memoryPalace/pipeline';
+import { renderLocalContextGuidance } from './memoryPalace/recallRouter';
+import { renderInteractionAdaptationGuidance } from './memoryPalace/interactionAdaptation';
+import { renderDeepEngagementGuidance } from './memoryPalace/deepEngagement';
+import { renderConversationEngagementGuidance } from './memoryPalace/conversationEngagement';
+import type { ConversationEngagementAnalysis } from './memoryPalace/conversationEngagement';
+import type { DeepEngagementAnalysis } from './memoryPalace/deepEngagement';
 import { buildHtmlPrompt } from './htmlPrompt';
 import { buildThinkingChainPrompt } from './thinkingChainPrompt';
 import { buildMcdMiniAppContextBlock } from './mcdToolBridge';
@@ -30,6 +36,7 @@ import { injectWorldbookDepthEntries, resolveWorldbookEntries } from './worldboo
 import { normalizeTranslationLangLabel } from './translationLang';
 import { cleanApiMessages, flattenImageContentParts } from './promptMessageCleanup';
 import { materializeVisionDescriptions } from './visionApi';
+import type { RecallEntryPoint, RecallTrace } from './memoryPalace/trace';
 
 export { cleanApiMessages, flattenImageContentParts } from './promptMessageCleanup';
 
@@ -60,6 +67,8 @@ export interface BuildChatPayloadInput {
      * 让角色能回忆起自己跟对面这些人的关系，而不是只按聊天历史召回。
      */
     recallQueryHint?: string;
+    /** 只用于 Trace 和后续功能的作用域判断，不参与当前召回排序。 */
+    recallEntryPoint?: RecallEntryPoint;
 
     // 实时世界 / 角色情绪
     realtimeConfig?: RealtimeConfig;
@@ -107,6 +116,8 @@ export interface BuildChatPayloadResult {
     cleanedApiMessages: Array<{ role: string; content: any }>;
     /** [system, ...cleanedApiMessages, 末尾 bilingual reminder?] —— 主 API 直接发这个 */
     fullMessages: Array<{ role: string; content: any }>;
+    /** 本轮记忆召回的脱敏 Trace；Prompt Build 被整体跳过时不存在。 */
+    recallTrace?: RecallTrace;
     /** 调试用：bilingual / mcd 是否实际注入 */
     flags: {
         bilingualActive: boolean;
@@ -200,7 +211,7 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
         realtimeConfig, innerState,
         translationConfig, htmlMode, thinkingChain, mcdMiniSnap, luckinMiniSnap, luckinChat,
     } = input;
-    // 角色可见性必须在统一载荷层再次收口。UI 聊天、2.0 推送、
+    // 角色可见性必须在统一载荷层再次收口。UI 聊天、1.0 本地主动消息、2.0 推送、
     // 彼方/小小窝等调用方各自维护筛选很容易漏掉一条路径；一旦把全量表情传进来，
     // 模型既会看到其他角色的专属表情，历史里的同名表情也可能反查到错误 URL。
     // 即使调用方已经过滤过，重复过滤仍是幂等的。
@@ -259,7 +270,13 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
     }
 
     // ── 1. Memory Palace 向量召回 ─────────────────────────
-    await injectMemoryPalace(char, recentMsgsHint, input.recallQueryHint, userProfile?.name);
+    const recallTrace = await injectMemoryPalace(
+        char,
+        recentMsgsHint,
+        input.recallQueryHint,
+        userProfile?.name,
+        { entryPoint: input.recallEntryPoint ?? 'chat_payload' },
+    );
 
     // ── 2. 解析音乐共听（如果 caller 没显式给，就从 snapshot 推） ──
     let userListeningContext = input.userListeningContext;
@@ -281,6 +298,10 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
     // volatileTail → 历史消息之后的 system（时间/召回/buff/日程/音乐等实时状态 + 点单类模式块）；
     // recencyTail（总纲+「回到你自己」钢印）最后拼进 volatileTail 末尾，保证它是模型
     // 开口前读到的最后内容 —— 双语/HTML/思考链等格式块都只能拼在 stable 里、排它前面。
+    // UI 为了不把通话/见面/剧情正文画进 ChatApp，会把这些 source 从 React state 过滤掉；
+    // 但主 API 的 historyMsgsForPrompt 来自完整 DB，仍然会看到它们。模式切换必须以 API
+    // 真正要发送的历史为准，否则模型会收到特殊模式正文，却收不到「切回聊天格式」的提示。
+    const returningFromMode = detectChatModeTransition(historyMsgsForPrompt);
     const parts = await ChatPrompts.buildSystemPromptParts(
         char, userProfile, groups, emojis, categories, recentMsgsHint,
         realtimeConfig, innerState || undefined,
@@ -288,7 +309,10 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
         !!isListeningTogether,
         musicCfg,
         recentTrackSwitch,
-        input.timelyByWorker ? { timelyByWorker: true } : undefined,
+        (input.timelyByWorker || returningFromMode) ? {
+            timelyByWorker: input.timelyByWorker === true,
+            returningFromMode: returningFromMode || undefined,
+        } : undefined,
     );
     let systemPrompt = parts.stable;
     let volatileTail = parts.volatileState;
@@ -406,6 +430,22 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
     }
 
     // ── 10. recency 钢印归位 + 组装 fullMessages ─────────
+    // 本地语境分析只在 ChatApp 主回复使用：它告诉主模型“这句话此刻在做什么”，
+    // 不指定具体记忆答案、不改变角色人格，也不进入其他 App 的专属写作提示。
+    if (input.recallEntryPoint === 'chat_app') {
+        volatileTail += renderLocalContextGuidance(recallTrace.contextAnalyzer);
+        volatileTail += renderInteractionAdaptationGuidance(recallTrace.interactionAdaptation?.analysis);
+        const engagementTrace = recallTrace.deepEngagement;
+        if (engagementTrace?.engine === 'legacy_depth') {
+            volatileTail += renderDeepEngagementGuidance(engagementTrace.analysis as DeepEngagementAnalysis | undefined);
+        } else if (engagementTrace?.engine === 'conversation_v2') {
+            // M3 核心原则常驻；分析结果只决定是否在后面追加当轮状态策略。
+            volatileTail += renderConversationEngagementGuidance(
+                engagementTrace.analysis as ConversationEngagementAnalysis | undefined,
+            );
+        }
+    }
+
     // 「关于对方的表达」+「回到你自己」必须是易变尾段的最后内容：修复旧版把双语/HTML/
     // 思考链/点单块拼在钢印之后、模型开口前最后读到的是格式说明书的问题。
     volatileTail += parts.recencyTail;
@@ -443,6 +483,7 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
         systemPrompt: systemPrompt + volatileTail,
         cleanedApiMessages: messagesWithWorldbookDepth,
         fullMessages: finalMessages,
+        recallTrace,
         flags: { bilingualActive, mcdActive, luckinActive, luckinChatActive, mcpChatActive, htmlActive, thinkingActive, promptBuildSkipped: false },
     };
 }

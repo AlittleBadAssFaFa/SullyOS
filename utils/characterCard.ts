@@ -20,6 +20,7 @@ export const CARD_STRIPPED_FIELDS = [
   // 1) 凭据（含 apiKey，灾难级泄漏）
   'emotionConfig',
   'embeddingConfig',
+  'proactiveConfig',
   'activeMsg2Config',
 
   // 2) 美化
@@ -50,6 +51,10 @@ export const CARD_STRIPPED_FIELDS = [
   'activeBuffs',
   'buffInjection',
   'memoryPalaceInjection',
+  'videoCallPerformancePersona',
+  'videoCallPerformancePersonaGeneratedAt',
+  'companionTouchSettings',
+  'companionAvatar',
   'savedDateState',
   'savedRoomState',
   'lastRoomDate',

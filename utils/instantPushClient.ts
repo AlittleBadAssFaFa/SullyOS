@@ -1,5 +1,6 @@
 import { InstantPushConfig, APIConfig, type InstantOversizeTransport } from '../types';
 import { loadPushVapid, isPushVapidReady } from './pushVapid';
+import { PERSONAL_INSTANT_PUSH_WORKER } from '../config/personalFork';
 import { ActiveMsgStore } from './activeMsgStore';
 import { appendDevDebugInstantPushLog, appendDevDebugLog, makeDebugLogger } from './devDebug';
 import {
@@ -11,7 +12,6 @@ import {
 } from './pushSubscribeShared';
 import { ReiClient } from '@rei-standard/amsg-client';
 import { INSTANT_WORKER_VERSION } from './instantWorkerVersion';
-import { PERSONAL_INSTANT_PUSH_WORKER } from '../config/personalFork';
 import { appendInstantTraceEntry } from './instantTraceLog';
 
 const log = makeDebugLogger('instant-push', 'InstantPush');
@@ -564,7 +564,7 @@ export function buildCloudflareDashboardUrl(workerUrl: string | undefined): stri
 
 // ── Web Push subscription helpers ─────────────────────────────────────────
 //
-// 与主动消息 2.0 共用一份 race 处理 / encoding helpers, 实现在
+// 与 proactivePushConfig 共用一份 race 处理 / encoding helpers, 实现在
 // pushSubscribeShared.ts.
 
 export async function getOrCreateInstantSubscription(

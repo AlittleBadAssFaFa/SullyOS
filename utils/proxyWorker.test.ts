@@ -1,10 +1,12 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_PROXY_WORKER,
   getProxyWorkerUrl,
   setProxyWorkerUrl,
   isCustomProxyWorker,
   rewriteStaleWorkerUrl,
+  requestProxyWorkerSettingsFocus,
+  consumeProxyWorkerSettingsFocus,
 } from './proxyWorker';
 
 const LS_KEY = 'sully_proxy_worker_url_v1';
@@ -70,10 +72,25 @@ describe('proxyWorker 中心配置', () => {
     localStorage.setItem(LS_KEY, 'https://sullymeow.ccwu213.cc');
     expect(getProxyWorkerUrl()).toBe(DEFAULT_PROXY_WORKER);
   });
+});
 
-  it('本 Fork 旧的 sf.badfafa.top → 读取时迁移回默认', () => {
-    localStorage.setItem(LS_KEY, 'https://sf.badfafa.top');
-    expect(getProxyWorkerUrl()).toBe(DEFAULT_PROXY_WORKER);
+describe('网络代理设置定位', () => {
+  beforeEach(() => {
+    const store = new Map<string, string>();
+    vi.stubGlobal('sessionStorage', {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, String(value)); },
+      removeItem: (key: string) => { store.delete(key); },
+    });
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('公告发出的定位请求只消费一次', () => {
+    expect(consumeProxyWorkerSettingsFocus()).toBe(false);
+    requestProxyWorkerSettingsFocus();
+    expect(consumeProxyWorkerSettingsFocus()).toBe(true);
+    expect(consumeProxyWorkerSettingsFocus()).toBe(false);
   });
 });
 
@@ -91,10 +108,6 @@ describe('rewriteStaleWorkerUrl', () => {
 
   it('迁移最早的 workers.dev 默认域名', () => {
     expect(rewriteStaleWorkerUrl('https://sully-n.qegj567.workers.dev/api')).toBe(`${DEFAULT_PROXY_WORKER}/api`);
-  });
-
-  it('迁移本 Fork 旧的自定义域名', () => {
-    expect(rewriteStaleWorkerUrl('https://sf.badfafa.top/api')).toBe(`${DEFAULT_PROXY_WORKER}/api`);
   });
 
   it('中心配了自部署 worker 时，死域名跟着迁到自部署地址', () => {

@@ -98,10 +98,16 @@ export interface OSTheme {
   lockWallpaper?: string;
   darkMode: boolean;
   contentColor?: string;
+  /** 冷启动时是否播放整机开机过场。默认开启（undefined 视为 true）。 */
+  bootAnimationEnabled?: boolean;
+  /** 进入聊天或切换角色时是否播放角色登场过场。默认开启。 */
+  chatCharacterSwitchAnimationEnabled?: boolean;
+  /** App 代码块加载较慢时是否显示加载柔光动画。默认开启；超时恢复页不受影响。 */
+  appLoadingAnimationEnabled?: boolean;
   /** 桌面整体皮肤。'animalcrossing' = 动森风格（NookPhone 彩色圆角图标 + 暖色界面）；
    *  'mobilegame' = 二次元手游首页风格（角色卡 + 等级经验条 + 货币栏 + 网格卡 + 罗盘 dock）；
    *  'tamagotchi' = 电子宠物养成机（桌面即角色的小屋舞台 + 四颗糖果实体键）。默认 'default'。 */
-  skin?: 'default' | 'animalcrossing' | 'mobilegame' | 'tamagotchi';
+  skin?: 'default' | 'animalcrossing' | 'mobilegame' | 'tamagotchi' | 'companion';
   /** 默认桌面的视觉版本：纸感是现行默认，nostalgia 是用户主动选择的最初粉绿白玻璃界面。 */
   desktopVariant?: 'paper' | 'nostalgia';
   /** 动森皮肤下，聊天 App 是否也跟随换成动森界面。默认 true（undefined 视为 true）。关掉则聊天保持原样式。 */
@@ -280,8 +286,8 @@ export interface APIConfig {
 export interface InstantPushConfig {
   enabled: boolean;
   workerUrl: string;        // https://your-instant.workers.dev
-  // VAPID 公私钥已迁移到 utils/pushVapid.ts (push_vapid_v1)，由 Instant Push
-  // 与主动消息 2.0 共用，避免重复订阅同一个 pushManager。
+  // VAPID 公私钥已迁移到 utils/pushVapid.ts (push_vapid_v1)，与 Proactive Push
+  // 共享同一份，避免两边互相 unsubscribe 抢同一个 pushManager 订阅。
   clientToken?: string;     // 对应 Worker 的 AMSG_CLIENT_TOKEN
   // 发送文本后是否自动触发 AI 回复 (worker 端跑 + push 回写). 仅控制"自动触发"这件事,
   // 不改变 instant push 本身的开关含义. 关闭时 instant 模式也保留手动 ⚡, 跟本地模式一致.
@@ -328,11 +334,16 @@ export interface ActiveMsg2GlobalConfig {
    */
   instantChatEnabled?: boolean;
   /**
-   * 上一次探到的「那台 Worker 真的跑得动即时对话吗」（见 ActiveMsgClient.probeInstantChatSupport）。
+   * 上一次**明确探到**的「那台 Worker 真的跑得动即时对话吗」
+   * （见 ActiveMsgClient.probeInstantChatSupportDetailed）。
    *
-   * false 时即时对话整个让位给本地生成，**用户开着也不走** —— 跑不动的 Worker 上这条路
-   * 是发一条挂一条，让位比让他对着「已开启」干等强。探测每次都会刷新它，用户更新完
-   * Worker 下一次探测自然翻回 true，不用手动去重开开关。
+   * 只有问到了答案才会写这里：200 + instantTick 写 true，200 但没有 instantTick 写 false。
+   * 网络异常、超时、401、5xx 一律不写——那些说明的是线路或配置有问题，不是这台 Worker
+   * 的能力，拿它们判死刑的话一次抖动就能把即时对话长期钉死在本地生成。
+   *
+   * false 时即时对话让位给本地生成，**用户开着也不走** —— 跑不动的 Worker 上这条路是
+   * 发一条挂一条，让位比让他对着「已开启」干等强。发消息路上会带冷却地现探一次，
+   * 用户更新完 Worker 后自己就翻回来了，不用手动去重开开关。
    *
    * undefined = 还没探过（刚装、没进过设置页），按放行处理：这一档说明我们不知道，
    * 而不是知道它不行；握手时会补探一次，之后就有准数了。
@@ -601,6 +612,30 @@ export interface MemoryPalaceBackupConfig {
     model: string;
     topN: number;
   };
+  /**
+   * 实验管线总开关。旧备份没有这一块时按全部关闭处理，确保升级后行为不突变。
+   */
+  featureFlags?: MemoryPalaceFeatureFlags;
+}
+
+export interface MemoryPalaceFeatureFlags {
+  recallRouter: boolean;
+  interactionAdaptation: boolean;
+  deepEngagement: boolean;
+  /** 预留的薄事实约束层，不属于 M3 Deep Engagement。 */
+  epistemicState: boolean;
+}
+
+/**
+ * 角色在 ChatApp 里愿意向用户当前交流步伐靠近多少。每维 0..1；这是角色属性，
+ * 不是用户状态。缺省时使用保守默认值，且不会从角色实际回复中自动学习。
+ */
+export interface CharacterAccommodationPolicy {
+  length?: number;
+  rhythm?: number;
+  energy?: number;
+  punctuation?: number;
+  emoji?: number;
 }
 
 export interface MemoryFragment {
@@ -620,6 +655,27 @@ export interface SkinSet {
   id: string;
   name: string;
   sprites: Record<string, string>; // emotion -> image URL or base64
+}
+
+export interface CompanionAvatarConfig {
+  version: 1;
+  /** Shared desktop/video visual source: model uses VRM/Live2D; upload/date use a flat portrait. */
+  source: 'model' | 'upload' | 'date';
+  /** Original PNG / GIF stored in blob_assets. Kept while switching sources. */
+  imageRef?: string;
+  fileName?: string;
+  mimeType?: string;
+  importedAt?: number;
+  /** Uploaded portraits kept in the wardrobe. The top-level image fields point at the active item. */
+  imageWardrobe?: Array<{
+    id: string;
+    imageRef: string;
+    fileName?: string;
+    mimeType?: string;
+    importedAt?: number;
+  }>;
+  /** Independent from Date mode's active outfit; desktop and video calls share this selected outfit. */
+  skinSetId?: string;
 }
 
 // 见面模式文风配置。由「场景布置」面板调整，datePrompts 构建 VN 提示词时读取，
@@ -760,6 +816,13 @@ export interface BubbleStyle {
     backgroundImage?: string;
     backgroundImageOpacity?: number;
     borderRadius: number;
+    /** 四角独立圆角；未设置的角继续跟随 borderRadius，兼容旧主题。 */
+    borderTopLeftRadius?: number;
+    borderTopRightRadius?: number;
+    borderBottomRightRadius?: number;
+    borderBottomLeftRadius?: number;
+    /** 自定义 CSS 伪元素尾巴的出现频率。旧主题缺省为 every，新建主题默认 last。 */
+    tailMode?: 'every' | 'last' | 'none';
     opacity: number;
     
     decoration?: string;
@@ -1164,7 +1227,7 @@ export interface VRNovelAnnotation {
 
 /** 角色在虚拟世界里的个人状态（挂在 CharacterProfile.vrState）。 */
 export interface VRWorldCharState {
-    /** 是否启用该角色的自主登入 */
+    /** 是否启用该角色的自主登入（独立于主动发消息 proactiveConfig） */
     enabled: boolean;
     /** 自主登入间隔（分钟，30 对齐；默认 120 = 2h） */
     intervalMinutes: number;
@@ -1173,6 +1236,10 @@ export interface VRWorldCharState {
      * 这是"每个角色书签不一样"的落点。
      */
     novelBookmarks?: Record<string, number>;
+    /** 用户为该角色圈定的优先书单。为空时从全书库自动轮换。 */
+    preferredNovelIds?: string[];
+    /** 上一次图书馆活动选中的小说，用于有其它候选时避免连续读同一本。 */
+    lastNovelId?: string;
     /** 最近一次活动落在哪个房间（UI 立绘站位用） */
     currentRoom?: VRRoomId;
     /** 最近一次活动时间戳（UI / 调度展示用） */
@@ -2085,6 +2152,8 @@ export interface StoryTheaterEntry {
     presetOverride?: StoryTheaterPresetDocument;
     /** 仅供拒绝 assistant prefill、要求最后一条消息必须为 user 的接口使用；默认关闭以保留原生预设效果。 */
     forceUserLastMessage?: boolean;
+    /** 兼容不接受酒馆高级采样参数的接口；默认关闭，完整发送预设中的 top_p 与两项 penalty。 */
+    omitSamplingParams?: boolean;
     createdAt: number;
     updatedAt: number;
 }
@@ -2389,13 +2458,138 @@ export interface CharMusicProfile {
     updatedAt: number;
 }
 
+export type CompanionTouchZone = 'head' | 'face' | 'hand' | 'body' | 'other';
+
+export interface AvatarTouchRegion {
+  id: string;
+  zone: CompanionTouchZone;
+  /** Regions are normalized against this Live2D model's rendered bounds, not the screen. */
+  shape: 'ellipse';
+  /** Ellipse center and size, all in model-local 0..1 coordinates. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface CompanionPerformancePrecision {
+  /** Temporarily suspend ambient turns/glances and keep the authored pose authoritative. */
+  lockAutonomy?: boolean;
+  /** Keep head targets absolute after gesture/emotion overlays. */
+  lockHead?: boolean;
+  /** Normalized pose targets (-1..1). */
+  headX?: number;
+  headY?: number;
+  headZ?: number;
+  eyeX?: number;
+  eyeY?: number;
+  bodyX?: number;
+  bodyY?: number;
+  bodyZ?: number;
+  /** Small intentional pass beyond the pose before settling, 0..0.2. */
+  overshoot?: number;
+  /** Time used to enter, pass and settle into the pose. */
+  settleMs?: number;
+}
+
+export interface CompanionTouchReaction {
+  id: string;
+  /** Displayed source line. Newly generated companion packs keep this in Simplified Chinese. */
+  text: string;
+  /** Spoken translation kept separate from the displayed source line. */
+  translation?: string;
+  /** Persisted local audio generated together with this reaction. */
+  voiceAssetId?: string;
+  voiceMimeType?: string;
+  voiceText?: string;
+  voiceLanguage?: string;
+  performance: {
+    emotion: 'neutral' | 'happy' | 'sad' | 'angry' | 'fearful' | 'disgusted' | 'surprised' | 'calm' | 'relaxed';
+    gesture: 'idle' | 'talk' | 'nod' | 'shake' | 'tilt' | 'explain' | 'wave' | 'shy' | 'lean-in' | 'lean-back';
+    camera: 'close' | 'medium' | 'wide' | 'push-in' | 'pull-out';
+    gaze: 'viewer' | 'left' | 'right' | 'down';
+    intensity: number;
+    faces?: Array<'wink' | 'grin' | 'pout' | 'blush' | 'eyes-closed' | 'smile-eyes' | 'brow-up' | 'brow-sad' | 'brow-angry'>;
+    modelAction?: string;
+    modelActions?: string[];
+    precision?: CompanionPerformancePrecision;
+  };
+}
+
+export interface CompanionStartupSettings {
+  enabled: boolean;
+  /** User-authored or character-generated line; never supplied by a desktop theme. */
+  line: string;
+  /** User-authored spoken translation. Empty means speak the source line. */
+  translation?: string;
+  /** Empty means the source/default language; otherwise a TTS language_boost code. */
+  voiceLanguage?: string;
+  performance: CompanionTouchReaction['performance'];
+  /** Optional LLM-directed beats, scheduled against the actual saved voice duration. */
+  performanceCues?: Array<{
+    at: number;
+    direction: CompanionTouchReaction['performance'];
+    endDirection?: CompanionTouchReaction['performance'];
+    holdMs?: number;
+  }>;
+  /** Source + spoken translation signature used to reject stale cue packs. */
+  performanceCueText?: string;
+  performanceGeneratedAt?: number;
+  voiceAssetId?: string;
+  voiceMimeType?: string;
+  voiceText?: string;
+  voiceGeneratedLanguage?: string;
+  voiceGeneratedAt?: number;
+  generatedAt?: number;
+  updatedAt?: number;
+}
+
+export interface CompanionStartupPreset {
+  id: string;
+  name: string;
+  startup: CompanionStartupSettings;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CompanionTouchPreset {
+  id: string;
+  name: string;
+  enabledZones: CompanionTouchZone[];
+  reactions: Partial<Record<CompanionTouchZone, CompanionTouchReaction[]>>;
+  voiceLanguage?: string;
+  voiceEnabled?: boolean;
+  voiceGeneratedCount?: number;
+  generatedAt?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CompanionTouchSettings {
+  enabledZones: CompanionTouchZone[];
+  reactions: Partial<Record<CompanionTouchZone, CompanionTouchReaction[]>>;
+  /** Language used for touch-reaction translations and their persisted voice pack. */
+  voiceLanguage?: string;
+  startup?: CompanionStartupSettings;
+  /** When true, reactions with voiceAssetId play their local pre-generated audio. */
+  voiceEnabled?: boolean;
+  voiceGeneratedCount?: number;
+  generatedAt?: number;
+  /** 多套开机演出独立保存；startup 仍是当前实际启用的兼容字段。 */
+  startupPresets?: CompanionStartupPreset[];
+  activeStartupPresetId?: string;
+  /** 多套触摸反馈独立保存；顶层 reactions 等字段仍是当前实际启用包。 */
+  touchPresets?: CompanionTouchPreset[];
+  activeTouchPresetId?: string;
+}
+
 export type MemoryPalaceWaterlinePreset = 'online' | 'balanced' | 'offline' | 'custom';
 
 export interface MemoryPalaceWaterlineConfig {
   preset: MemoryPalaceWaterlinePreset;
-  /** 自定义档位才读取；预设档位由统一映射决定。 */
+  /** 自定义模式保留在热区内的消息数量。 */
   hotZoneSize?: number;
-  /** 自定义档位才读取；预设档位由统一映射决定。 */
+  /** 自定义模式触发下一轮整理前允许积累的缓冲消息数量。 */
   bufferThreshold?: number;
 }
 
@@ -2403,6 +2597,163 @@ export interface CharacterProfile {
   id: string;
   name: string;
   avatar: string;
+  /**
+   * 视频通话使用的本地 VRM / Live2D 形象。模型二进制包保存在 IndexedDB
+   * blob_assets，角色资料只保存轻量索引，避免把数 MB 的模型塞进
+   * localStorage / React state。
+   */
+  videoAvatar?: {
+      version: 1;
+      format: 'vrm';
+      assetId: string;
+      fileName: string;
+      byteLength: number;
+      importedAt: number;
+      /** 用户在舞台上拖拽/捏合校准的构图；偏移量是相对画布宽高的比例。 */
+      framing?: {
+          scale: number;
+          offsetX: number;
+          offsetY: number;
+      };
+      /** 用户手动锚定的脸部特写构图；close/push-in 镜头直接落到这里，不再按身高比例猜脸的位置。 */
+      faceFraming?: {
+          scale: number;
+          offsetX: number;
+          offsetY: number;
+      };
+      /** 触感陪伴桌面（companion 皮肤）的全屏构图；与通话窗口的 framing 独立保存。 */
+      companionFraming?: {
+          scale: number;
+          offsetX: number;
+          offsetY: number;
+      };
+      /** 陪伴桌面角色可视窗口裁剪；数值为相对舞台宽高的内缩比例。 */
+      companionCrop?: {
+          top: number;
+          right: number;
+          bottom: number;
+          left: number;
+      };
+  } | {
+      version: 1;
+      format: 'live2d';
+      assetId: string;
+      fileName: string;
+      /** 随 SullyOS 发布的静态模型；不依赖 IndexedDB，也不需要进入模型备份。 */
+      builtIn?: true;
+      /** 相对当前应用根目录的 model3.json；仅 builtIn 模型使用。 */
+      builtinModelUrl?: string;
+      /** balanced = 2K 默认纹理，hd = 4K 可选纹理。 */
+      builtinQuality?: 'balanced' | 'hd';
+      /** 导入模型的运行纹理档位；默认 balanced(2K)，源模型最多保留到 4K 以便切换。 */
+      textureQuality?: 'balanced' | 'hd';
+      /** 内置 Sully 的一次性默认构图迁移版本。 */
+      builtinFramingVersion?: 1 | 2;
+      /** ZIP 包内 model3.json 的完整相对路径。 */
+      modelPath: string;
+      byteLength: number;
+      fileCount: number;
+      importedAt: number;
+      /** 源包格式：旧模型使用 STORE，新导入 ZIP 保留原包并按文件流式读取。 */
+      runtimePackageEncoding?: 'store-v1' | 'zip-v1';
+      /** 自动动作权限策略版本；2 = 安全动作默认加入 AI 动作库。 */
+      actionPolicyVersion?: 2;
+      /** 用户校准后的 Live2D 舞台构图；偏移量是相对画布宽高的比例。 */
+      framing?: {
+          scale: number;
+          offsetX: number;
+          offsetY: number;
+      };
+      /** 用户手动锚定的脸部特写构图；close/push-in 镜头直接落到这里，不再按启发式猜脸的位置。 */
+      faceFraming?: {
+          scale: number;
+          offsetX: number;
+          offsetY: number;
+      };
+      /** 触感陪伴桌面（companion 皮肤）的全屏构图；与通话窗口的 framing 独立保存。 */
+      companionFraming?: {
+          scale: number;
+          offsetX: number;
+          offsetY: number;
+      };
+      /** 陪伴桌面角色可视窗口裁剪；数值为相对舞台宽高的内缩比例。 */
+      companionCrop?: {
+          top: number;
+          right: number;
+          bottom: number;
+          left: number;
+      };
+      /** 用户为这个 Live2D 模型单独圈选的触摸区域；未命中时仍回退模型自己的 HitArea。 */
+      touchRegions?: AvatarTouchRegion[];
+      /** model3.json Groups 中声明的口型参数；没有声明时使用标准参数。 */
+      lipSyncParameterIds: string[];
+      /** 每个模型自己的动作/表情权限。AI 只能调用 permission=ai 的项目。 */
+      actions: Array<{
+          id: string;
+          /** params = 用户自建的参数组合动作（VTube Studio 风格），不依赖模型文件。 */
+          kind: 'motion' | 'expression' | 'params';
+          name: string;
+          file: string;
+          group?: string;
+          index?: number;
+          expressionId?: string;
+          /** kind=params 时要推到的参数目标值列表。 */
+          params?: Array<{ id: string; value: number }>;
+          /** motion3/exp3 文件实际写入的参数；用于高质量模式判断能否安全并行动作。 */
+          parameterIds?: string[];
+          /** exp3 参数目标；衣橱会把这些值作为持久底层，避免表情重置顺带清掉服装。 */
+          parameterValues?: Array<{
+              id: string;
+              value: number;
+              blend?: 'Add' | 'Multiply' | 'Overwrite';
+          }>;
+          /** VTube Studio 中绑定的原始组合键，例如 F1 / Alt+Q。 */
+          hotkey?: string;
+          source?: 'model3' | 'vtube' | 'discovered' | 'custom';
+          /** VTube Studio 的“清除全部表情”热键。 */
+          resetExpression?: boolean;
+          tags: string[];
+          /** 真·衣橱动作：只允许用户手动触发，永远不会进入 LLM 动作白名单。 */
+          wardrobe?: boolean;
+          permission: 'ai' | 'manual' | 'blocked';
+      }>;
+      /** 衣橱中最后一次由用户手动选择的服装动作。 */
+      activeWardrobeActionId?: string;
+  };
+  /** Inactive whole-model outfits. Switching swaps one entry with videoAvatar; only matching formats are shown. */
+  videoAvatarWardrobe?: Array<NonNullable<CharacterProfile['videoAvatar']>>;
+  /** Which character visual the tactile companion desktop should render. */
+  companionAvatar?: CompanionAvatarConfig;
+  /**
+   * 视频通话舞台的自定义背景：`blobref:<id>` 令牌（本地图片，存 IndexedDB
+   * blob_assets，备份导出时由 resolveBlobRefsDeep 自动还原）或 http(s) 图床直链。
+   * 空 = 默认氛围渐变。
+   */
+  videoCallBackground?: string;
+  /**
+   * 触感陪伴桌面（companion 皮肤）的背景：`preset:<id>`（内置华丽渐变场景）、
+   * `blobref:<id>` 令牌（本地图片，备份由 resolveBlobRefsDeep 还原）或 http(s)
+   * 图床直链。空 = 默认时段天光。
+   */
+  companionBackground?: string;
+  /**
+   * 触感陪伴桌面的本地反馈包。用户只在设置中主动生成一次；之后每次触碰
+   * 都从这里轮播台词与演出，不再逐次请求主聊天 API。
+   */
+  companionTouchSettings?: CompanionTouchSettings;
+  /**
+   * 视频通话演出编排档位：
+   * - basic / undefined：主回复模型顺手输出动作指令，不增加请求。
+   * - high：情绪 Buff API 只读取角色性格与本轮定稿台词，独立排练动作。
+   */
+  videoCallPerformanceQuality?: 'basic' | 'high';
+  /**
+   * 高质量视频通话首次使用时，由副 API 从完整 ContextBuilder 上下文提炼的
+   * 短表演人格。之后每轮导演只读取这份缓存（最多 200 字），不再重复携带整份人设。
+   * 属本地运行派生数据；角色卡分享时剥离。
+   */
+  videoCallPerformancePersona?: string;
+  videoCallPerformancePersonaGeneratedAt?: number;
   description: string;
   systemPrompt: string;
   worldview?: string;
@@ -2454,6 +2805,7 @@ export interface CharacterProfile {
   spriteConfig?: SpriteConfig;
   customDateSprites?: string[]; // User-added custom emotion names for date mode (per-character)
   dateLightReading?: boolean;   // Light reading mode for novel/text view in date
+  dateReadingShowAvatars?: boolean; // Show both participants' avatars beside messages in date reading mode
   dateSkinSets?: SkinSet[];     // Multiple skin sets for portrait mode
   activeSkinSetId?: string;     // Currently active skin set ID
   dateStyleConfig?: DateStyleConfig; // 见面模式文风（写作风格 / 叙事人称 / 自定义补充）
@@ -2566,6 +2918,18 @@ export interface CharacterProfile {
   // Cross-session guidebook insights: what char has discovered about user across games
   guidebookInsights?: string[];
 
+  // 主动消息配置
+  proactiveConfig?: {
+    enabled: boolean;
+    intervalMinutes: number; // 30, 60, 120, 240, etc.
+    useSecondaryApi?: boolean;
+    secondaryApi?: {
+      baseUrl: string;
+      apiKey: string;
+      model: string;
+    };
+  };
+
   // 情绪Buff系统
   activeMsg2Config?: ActiveMsg2CharacterConfig;
   activeBuffs?: CharacterBuff[];
@@ -2601,6 +2965,8 @@ export interface CharacterProfile {
   };
   personalityStyle?: 'emotional' | 'narrative' | 'imagery' | 'analytical';
   ruminationTendency?: number;  // 反刍倾向 0-1，默认 0.3
+  /** ChatApp 专属的语言趋同强度；不影响其他 App 的写作人格。 */
+  interactionAccommodation?: CharacterAccommodationPolicy;
   memoryPalaceInjection?: string;  // 记忆宫殿检索结果，注入到 System Prompt（运行时填充，不持久化）
   roomPlatesInjection?: string;    // 房间门牌（常驻语义层），注入到 System Prompt（运行时填充，来源 room_plates 表）
 
@@ -2689,7 +3055,7 @@ export interface CharacterProfile {
 
   /**
    * 虚拟世界「彼方」的个人状态：是否自主登入、登入间隔、各本小说的独立书签等。
-   * 与其他定时任务相互独立，不挤占触发。
+   * 独立于 proactiveConfig（主动发消息），互不挤占触发。
    */
   vrState?: VRWorldCharState;
 }
@@ -3479,6 +3845,8 @@ export interface FullBackupData {
     mediaAssets?: {
         charId: string;
         avatar?: string;
+        companionAvatar?: CompanionAvatarConfig;
+        companionTouchSettings?: CompanionTouchSettings;
         sprites?: Record<string, string>;
         dateSkinSets?: SkinSet[];
         activeSkinSetId?: string;
@@ -3489,6 +3857,7 @@ export interface FullBackupData {
     }[];
 
     xhsActivities?: XhsActivityRecord[];
+    xhsOwnedPosts?: XhsOwnedPost[];
     xhsStockImages?: XhsStockImage[];
 
     // Study Room settings
@@ -3555,6 +3924,7 @@ export interface FullBackupData {
     chatTranslateSourceLangByChar?: Record<string, string>;
     chatTranslateTargetLangByChar?: Record<string, string>;
     chatTranslateEnabledByChar?: Record<string, boolean>;
+    chatTranslateExpandedByChar?: Record<string, boolean>;
     chatArchivePrompts?: any;
     chatActiveArchivePromptId?: string;
     characterRefinePrompts?: any;
@@ -3595,6 +3965,7 @@ export interface CloudBackupConfig {
     githubOwner?: string;
     githubRepo?: string;
     githubUseProxy?: boolean;   // route through Cloudflare Worker (for GFW)
+    githubProxyConsentVersion?: number; // must be 1: user explicitly accepted proxy transit after the safety change
 
     lastBackupTime?: number;    // timestamp
     lastBackupSize?: number;    // bytes
@@ -3666,18 +4037,39 @@ export interface XhsActivityRecord {
     timestamp: number;
     actionType: XhsActionType;
     content: {
+        noteId?: string;
         title?: string;
         body?: string;
         tags?: string[];
         keyword?: string;
         savedTopics?: { title: string; desc: string; noteId?: string }[];
         notesViewed?: { noteId: string; title: string; desc: string; author: string; likes: number }[];
-        commentTarget?: { noteId: string; title: string };
+        commentTarget?: { noteId: string; title: string; commentId?: string };
         commentText?: string;
     };
     thinking: string;  // Character's internal monologue / reasoning
     result: 'success' | 'failed' | 'skipped';
     resultMessage?: string;
+}
+
+/**
+ * 角色在共享的真实小红书账号下发布的笔记归属。
+ * 独立于可清理的活动日志，作为自由活动 App 中“角色主页”的持久化数据源。
+ */
+export interface XhsOwnedPost {
+    id: string; // `${characterId}:${noteId}`
+    characterId: string;
+    noteId: string;
+    title: string;
+    body: string;
+    tags?: string[];
+    publishedAt: number;
+    updatedAt: number;
+    xsecToken?: string;
+    likes?: number;
+    collects?: number;
+    commentCount?: number;
+    shareCount?: number;
 }
 
 export interface XhsFreeRoamSession {
@@ -3691,6 +4083,7 @@ export interface XhsFreeRoamSession {
 
 export interface XhsMcpConfig {
     enabled: boolean;
+    mode?: 'local' | 'lite'; // 部署模式；不要再用 /api 路径推断（本地 Skills 与 Lite 都使用 /api）
     serverUrl: string;  // MCP: "http://localhost:18060/mcp" | Skills: "http://localhost:18061/api" | Lite Worker: "https://xhs-lite.<acct>.workers.dev/api"
     cookie?: string;    // Lite 模式：登录后的小红书完整 cookie（含 a1 / web_session）。仅 lite Worker 用。
     platform?: 'xhs' | 'rednote'; // Lite 自动识别出的国内小红书 / 全球 RedNote 后端

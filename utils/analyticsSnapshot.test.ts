@@ -20,6 +20,7 @@ import {
     triState,
     type FeatureSources,
 } from './analyticsSnapshot';
+import { createBuiltinSullyLive2DConfig } from './builtinSullyLive2D';
 
 /**
  * 毒药串：每一条都放进某个用户可填字段里。它们只要出现在上报里就是泄漏。
@@ -222,12 +223,12 @@ describe('当前功能启用 · 开关值的判定', () => {
         expect(collectFeatureFlags(poisonedSources()).QQ桥接).toBe('开');
     });
 
-    it('个人版预置 VAPID 公钥后，Instant Push 地址和开关齐全 → 开', () => {
+    it('Instant Push 填了地址但没生成 VAPID 密钥 → 配了没开', () => {
         localStorage.setItem('instant_push_config_v1', JSON.stringify({
             enabled: true, workerUrl: 'https://my-worker.invalid',
         }));
-        // 个人版的安全默认值只包含公钥；私钥仍只存在 Cloudflare Worker。
-        expect(collectFeatureFlags(poisonedSources()).InstantPush).toBe('开');
+        // push_vapid_v1 没设 → isPushVapidReady() 为 false
+        expect(collectFeatureFlags(poisonedSources()).InstantPush).toBe('配了没开');
     });
 
     it('MCP 分开数「配了几个 / 启用几个 / 连通几个」', () => {
@@ -290,6 +291,11 @@ describe('当前功能启用 · 开关值的判定', () => {
         expect(flags['单独关了即时对话的角色数']).toBe('1');
     });
 
+    it('不上报已经全局下线的主动消息 Push 加速', () => {
+        // 那一层 FORCE_DISABLED 恒为关，报出来会被误读成「没人用」。
+        localStorage.setItem('proactive_push_enabled_v1', 'true');
+        expect(collectFeatureFlags(poisonedSources())).not.toHaveProperty('主动消息Push加速');
+    });
 });
 
 describe('当前外观 · 不泄漏用户自己捏的东西', () => {
@@ -369,5 +375,85 @@ describe('当前角色设置 · 不泄漏角色内容', () => {
             'active',
         );
         expect(flags.定时消息任务数).toBe('4+');
+    });
+});
+
+describe('当前角色设置 · 桌面陪伴与通话形象', () => {
+    /** 自己导过模型的角色。文件名是用户自己的，塞毒药盯着它别漏出去。 */
+    const withImportedAvatar = (id: string, format: 'live2d' | 'vrm') => ({
+        id,
+        name: POISON.myName,
+        videoAvatar: format === 'live2d'
+            ? { version: 1, format, assetId: id, fileName: POISON.myName, modelPath: POISON.myName, byteLength: 1, fileCount: 3, importedAt: 1 }
+            : { version: 1, format, assetId: id, fileName: POISON.myName, byteLength: 1, importedAt: 1 },
+    } as unknown as CharacterProfile);
+
+    /** 预置角色 Sully：开箱就绑着内置 Live2D，用户什么都没做。 */
+    const builtinSullyChar = (id = 'sully') => ({
+        id,
+        name: 'Sully',
+        videoAvatar: createBuiltinSullyLive2DConfig('balanced'),
+    } as unknown as CharacterProfile);
+
+    const plainChar = (id: string) => ({ id, name: POISON.myName } as unknown as CharacterProfile);
+
+    it('内置 Sully 不算「自己导入」——它是开箱就绑着的，数进去人人至少 1', () => {
+        const flags = collectCharSettings([builtinSullyChar(), plainChar('b')], 'sully');
+        expect(flags.自己导入形象的角色数).toBe('0');
+        expect(flags.导入的形象格式).toBe('没导入');
+        expect(flags.内置Sully画质).toBe('2K');
+    });
+
+    it('自己导入的才数，全部角色一起数（不是只看活跃角色）', () => {
+        const flags = collectCharSettings(
+            [builtinSullyChar(), withImportedAvatar('b', 'live2d'), withImportedAvatar('c', 'vrm')],
+            // 活跃角色是没导过模型的那个：只看它会把这个人报成 0
+            'sully',
+        );
+        expect(flags.自己导入形象的角色数).toBe('2-3');
+        expect(flags.导入的形象格式).toBe('都有');
+    });
+
+    it('只导过一种格式就报那一种', () => {
+        expect(collectCharSettings([withImportedAvatar('a', 'live2d')], 'a').导入的形象格式).toBe('live2d');
+        expect(collectCharSettings([withImportedAvatar('a', 'vrm')], 'a').导入的形象格式).toBe('vrm');
+    });
+
+    it('换到 4K 的人单独看得见，没用内置的不混进 2K', () => {
+        const hd = { ...builtinSullyChar(), videoAvatar: createBuiltinSullyLive2DConfig('hd') } as CharacterProfile;
+        expect(collectCharSettings([hd], 'sully').内置Sully画质).toBe('4K');
+        expect(collectCharSettings([withImportedAvatar('a', 'vrm')], 'a').内置Sully画质).toBe('没用内置');
+    });
+
+    it('陪伴形象来源没设过报「动态模型」，主动换过的才落到另外两档', () => {
+        const withSource = (id: string, source: string) => ({
+            id,
+            name: POISON.myName,
+            companionAvatar: { version: 1, source, imageRef: POISON.url, fileName: POISON.myName },
+        } as unknown as CharacterProfile);
+
+        expect(collectCharSettings([plainChar('a')], 'a').桌面陪伴形象来源).toBe('动态模型');
+        expect(collectCharSettings([withSource('a', 'upload')], 'a').桌面陪伴形象来源).toBe('静态图片');
+        expect(collectCharSettings([withSource('a', 'date')], 'a').桌面陪伴形象来源).toBe('见面立绘');
+
+        // 「换掉动态模型的角色数」只数主动换过的：没设过（undefined）和显式选回 model 都不算，
+        // 把它们算进去的话这一格会变成角色总数，用它判断「有没有人要静态形象」会判反。
+        const flags = collectCharSettings(
+            [plainChar('a'), withSource('b', 'model'), withSource('c', 'upload'), withSource('d', 'date')],
+            'a',
+        );
+        expect(flags.换掉动态模型的角色数).toBe('2-3');
+    });
+
+    it('模型文件名、图片引用都不出去', () => {
+        const flags = collectCharSettings(
+            [withImportedAvatar('a', 'live2d'), {
+                id: 'b',
+                name: POISON.myName,
+                companionAvatar: { version: 1, source: 'upload', imageRef: POISON.url, fileName: POISON.myName },
+            } as unknown as CharacterProfile],
+            'a',
+        );
+        expectNoLeak(flags);
     });
 });
