@@ -462,6 +462,7 @@ const McpServersCard: React.FC<{
 const Settings: React.FC = () => {
   const {
       apiConfig, updateApiConfig, closeApp, availableModels, setAvailableModels,
+      theme, updateTheme,
       exportSystem, importSystem, addToast, showError, resetSystem, updateCharacter,
       apiPresets, addApiPreset, updateApiPreset, removeApiPreset,
       sysOperation, // Get progress state
@@ -558,6 +559,16 @@ const Settings: React.FC = () => {
   // 「该备份啦」提醒频率（1~30 天）。改动即落 localStorage（backupReminder 模块自管持久化）。
   const [backupReminderDays, setBackupReminderDays] = useState<number>(() => getBackupReminderState().intervalDays);
   const backupDaysAgo = daysSinceLastBackup();
+  const hasJournalAppearanceOverride = Boolean(
+    theme.journalAppearance
+    && ((theme.journalAppearance.preset || 'original') !== 'original'
+      || theme.journalAppearance.customCss?.trim())
+  );
+
+  const handleJournalAppearanceEmergencyReset = async () => {
+    await updateTheme({ journalAppearance: undefined });
+    addToast('已从系统设置还原交换日记原版样式', 'success');
+  };
 
   // Cloud backup local config state (WebDAV)
   const [cbUrl, setCbUrl] = useState(cloudBackupConfig.webdavUrl);
@@ -1624,6 +1635,21 @@ const Settings: React.FC = () => {
       setGhTesting(false);
   };
 
+  const handleGithubProxyToggle = (enabled: boolean) => {
+      setGhUseProxy(enabled);
+      // 勾选本身就是用户对中转的明确同意，立即持久化。旧行为只有再次完成
+      // “测试并连接”才保存，用户可能勾完直接关闭，实际上传仍在走直连。
+      updateCloudBackupConfig({
+          githubUseProxy: enabled,
+          githubProxyConsentVersion: enabled ? 1 : undefined,
+      });
+      trackEvent('切换 GitHub 备份线路', { route: enabled ? 'cloudflare_worker' : 'direct' });
+      addToast(
+          enabled ? '已改用应用内 Cloudflare 中转，下次备份立即生效' : '已改为直连 GitHub 附件域名',
+          'info',
+      );
+  };
+
   const handleDisableCloud = () => {
       trackEvent('关闭云端备份', { provider: cloudBackupConfig.provider === 'github' ? 'github' : 'webdav' });
       updateCloudBackupConfig({ enabled: false });
@@ -1913,6 +1939,31 @@ const Settings: React.FC = () => {
       </div>
 
       <div className="flex-1 overflow-y-auto p-5 space-y-6 no-scrollbar pb-20">
+
+        {/* 美化入口本身被错误 CSS 盖住时，必须有一个完全不经过日记 App 的急救通道。 */}
+        <SettingsSection
+            title="外观急救"
+            badge={hasJournalAppearanceOverride
+                ? <span className="text-[9px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-bold shrink-0">日记美化已启用</span>
+                : undefined}
+            icon={
+                <div className="p-2 bg-amber-100/70 rounded-xl text-amber-700">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.7} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M11.42 15.17 17.25 21a2.12 2.12 0 0 0 3-3l-5.84-5.84M11.42 15.17l2.83-2.83M11.42 15.17l-4.68 4.68a2.121 2.121 0 0 1-3-3l6.59-6.59m4.08 1.9 2.83-2.83m0 0 1.5-1.5a2.121 2.121 0 0 0-3-3l-1.5 1.5m3 3-3-3m-3.91 3.91-4.95-4.95a2.121 2.121 0 0 0-3 3l4.95 4.95" /></svg>
+                </div>
+            }
+        >
+            <p className="text-xs text-slate-500 leading-relaxed">
+                如果交换日记的自定义 CSS 把返回键、设置键遮住或变得无法点击，可以从这里直接清除日记主题与 CSS，不影响日记内容。
+            </p>
+            <button
+                type="button"
+                disabled={!hasJournalAppearanceOverride}
+                onClick={handleJournalAppearanceEmergencyReset}
+                className="mt-3 w-full rounded-xl bg-amber-600 px-4 py-3 text-xs font-bold text-white shadow-sm transition active:scale-[.98] disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none"
+            >
+                {hasJournalAppearanceOverride ? '重置交换日记美化' : '交换日记当前为原版'}
+            </button>
+        </SettingsSection>
         
         {/* 数据备份区域 */}
         <SettingsSection
@@ -3541,12 +3592,19 @@ const Settings: React.FC = () => {
           out owner via /user and auto-create a private 'sully-backup' repo. */}
       <Modal isOpen={showGithubModal} title="GitHub 备份" onClose={() => setShowGithubModal(false)}>
           <div className="space-y-4 p-1">
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2">
                   <p className="text-[11px] text-slate-700 leading-relaxed">
-                      <b>三步搞定，不用梯子：</b><br/>
+                      <b>三步连接 GitHub：</b><br/>
                       ① 点下面按钮跳到 GitHub 创建 Token<br/>
                       ② 复制 token，回来粘到下面框里<br/>
                       ③ 点 <b>测试并连接</b> — 我们会自动帮你建好私有仓库 <code className="bg-white px-1 rounded">{ghRepo || 'sully-backup'}</code>
+                  </p>
+                  <p className="text-[10px] text-slate-500 leading-relaxed border-t border-slate-200 pt-2">
+                      <b>连接成功不等于上传一定能通。</b> GitHub 网页、账号接口和 ZIP 附件上传分别使用
+                      <code className="mx-0.5 bg-white px-1 rounded">github.com</code>、
+                      <code className="mx-0.5 bg-white px-1 rounded">api.github.com</code>、
+                      <code className="mx-0.5 bg-white px-1 rounded">uploads.github.com</code>。
+                      不同网络、梯子分流和 iOS PWA 可能只接管其中一部分，所以会出现“网页能进但上传失败”或“开着梯子反而不通”。
                   </p>
               </div>
 
@@ -3579,8 +3637,8 @@ const Settings: React.FC = () => {
                       className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-700 font-mono focus:border-slate-500 focus:ring-1 focus:ring-slate-300 outline-none"
                   />
                   <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
-                      Token 保存在本机配置中。GitHub 默认直连；仅当你手动开启下方中转时，
-                      Token 会随 GitHub 请求经过所选 Worker，项目不会主动留存。
+                      Token 保存在本机配置中。GitHub 默认直连；如果附件域名不通，可在下方高级选项开启应用内中转。
+                      仅在你手动开启后，Token 才会随 GitHub 请求经过所选 Worker，项目不会主动留存。
                   </p>
               </div>
 
@@ -3637,14 +3695,19 @@ const Settings: React.FC = () => {
                           <input
                               type="checkbox"
                               checked={ghUseProxy}
-                              onChange={(e) => setGhUseProxy(e.target.checked)}
+                              onChange={(e) => handleGithubProxyToggle(e.target.checked)}
                               className="rounded"
                           />
-                          <span>使用 Cloudflare 中转（默认关闭 · 直连失败时可开启）</span>
+                          <span>应用内 Cloudflare 中转（与手机 / 电脑的梯子是两回事）</span>
                       </label>
+                      <p className="text-[10px] text-slate-500 leading-relaxed pl-5">
+                          <b>{ghUseProxy ? '当前线路：浏览器 → Cloudflare Worker → GitHub。' : '当前线路：浏览器 → GitHub 直连。'}</b>
+                          勾选状态会立即保存，不必重新连接。系统梯子可能因规则分流、节点或 PWA 未接管而漏掉
+                          <code className="mx-0.5 bg-white px-1 rounded">uploads.github.com</code>；应用内中转是另一条独立线路，也可能被某些网络拦截。
+                      </p>
                       <p className="text-[10px] text-slate-400 leading-relaxed pl-5">
-                          开启后，GitHub 请求会由所选 Worker 转发，备份仍存放在你的 GitHub 私有仓库；
-                          项目不建立备份数据库，也不主动留存 Token 或备份文件。大于 32MB 时会自动分片，并在全部完成后发布。
+                          中转只负责转发，备份仍存放在你的 GitHub 私有仓库；项目不建立备份数据库，也不主动留存 Token 或备份文件。
+                          大于 32MB 时会自动分片，并在全部完成后发布。
                       </p>
                   </div>
               )}
